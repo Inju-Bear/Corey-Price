@@ -41,20 +41,28 @@ service cloud.firestore {
 
     function isValidUser(data) {
       return data.keys().hasAll(['uid', 'email', 'role']) &&
-             data.role in ['student', 'parent', 'admin'] &&
+             data.role in ['student', 'parent', 'admin', 'recruiter'] &&
              data.email is string &&
              data.email.size() > 0 && data.email.size() < 100;
     }
 
+    function isValidLead(data) {
+      return data.keys().hasAll(['recruiterId', 'studentId', 'studentEmail', 'scannedAt']) &&
+             data.recruiterId == request.auth.uid &&
+             data.studentEmail is string && data.studentEmail.size() > 0;
+    }
+
     function isValidEvent(data) {
-      return data.keys().hasAll(['name', 'date', 'location', 'city', 'description']) &&
+      return data.keys().hasAll(['name', 'date', 'location', 'city', 'description', 'status']) &&
              data.name is string && data.name.size() > 0 && data.name.size() < 200 &&
+             data.status in ['published', 'draft'] &&
              data.date is string && data.city is string && data.location is string;
     }
 
     function isValidSeminar(data) {
-      return data.keys().hasAll(['title', 'time']) &&
-             data.title is string && data.title.size() > 0 && data.title.size() < 200;
+      return data.keys().hasAll(['title', 'time', 'status']) &&
+             data.title is string && data.title.size() > 0 && data.title.size() < 200 &&
+             data.status in ['published', 'draft'];
     }
 
     function isValidNotification(data) {
@@ -78,6 +86,12 @@ service cloud.firestore {
     // ===============================================================
     // Rules
     // ===============================================================
+    
+    match /leads/{leadId} {
+      allow read: if isAuthenticated() && (resource.data.recruiterId == request.auth.uid || isAdmin());
+      allow create: if isAuthenticated() && isValidLead(request.resource.data);
+      allow update, delete: if isAuthenticated() && (resource.data.recruiterId == request.auth.uid || isAdmin());
+    }
 
     match /users/{userId} {
       allow read: if isOwner(userId) || isAdmin();
@@ -95,16 +109,17 @@ service cloud.firestore {
 
       match /registrations/{eventId} {
         allow read: if isOwner(userId) || isAdmin();
-        allow create, update: if isOwner(userId) && isValidRegistration(request.resource.data);
+        allow create, update: if (isOwner(userId) || isAdmin()) && isValidRegistration(request.resource.data);
+        allow delete: if (isOwner(userId) || isAdmin());
       }
     }
 
     match /events/{eventId} {
-      allow read: if true;
+      allow read: if resource == null || resource.data.status != 'draft' || isAdmin();
       allow create, update, delete: if isAdmin();
 
       match /seminars/{seminarId} {
-        allow read: if true;
+        allow read: if resource == null || resource.data.status != 'draft' || isAdmin();
         allow create, update, delete: if isAdmin();
       }
 
@@ -112,6 +127,16 @@ service cloud.firestore {
         allow read: if true;
         allow create: if isAuthenticated() && isValidFeedback(request.resource.data);
         allow update, delete: if isAdmin();
+      }
+
+      match /sponsors/{sponsorId} {
+        allow read: if true;
+        allow create, update, delete: if isAdmin();
+      }
+
+      match /updates/{updateId} {
+        allow read: if true;
+        allow create, update, delete: if isAdmin();
       }
     }
   }

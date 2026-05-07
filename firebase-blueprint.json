@@ -12,6 +12,7 @@
         "school": { "type": "string", "description": "School name (for students)" },
         "graduationYear": { "type": "string" },
         "interests": { "type": "array", "description": "Major interests or industries" },
+        "photoURL": { "type": "string", "description": "URL to the user's profile picture" },
         "createdAt": { "type": "string", "format": "date-time" }
       },
       "required": ["uid", "email", "role"]
@@ -28,7 +29,9 @@
         "time": { "type": "string" },
         "location": { "type": "string" },
         "description": { "type": "string" },
-        "mapUrl": { "type": "string", "description": "URL to the booth map image" }
+        "mapUrl": { "type": "string", "description": "URL to the booth map image" },
+        "floorPlanUrl": { "type": "string", "description": "URL to the custom interactive floor plan image" },
+        "status": { "type": "string", "enum": ["published", "draft"] }
       },
       "required": ["name", "date", "location"]
     },
@@ -43,7 +46,8 @@
         "speaker": { "type": "string" },
         "time": { "type": "string" },
         "room": { "type": "string" },
-        "category": { "type": "string" }
+        "category": { "type": "string" },
+        "status": { "type": "string", "enum": ["published", "draft"] }
       },
       "required": ["eventId", "title", "time"]
     },
@@ -75,12 +79,86 @@
         "createdAt": { "type": "string", "format": "date-time" }
       },
       "required": ["userId", "rating", "createdAt"]
+    },
+    "Registration": {
+      "title": "Event Registration",
+      "description": "User registration for a specific expo event.",
+      "type": "object",
+      "properties": {
+        "eventId": { "type": "string" },
+        "eventName": { "type": "string" },
+        "userName": { "type": "string" },
+        "userEmail": { "type": "string" },
+        "registeredAt": { "type": "string", "format": "date-time" },
+        "status": { "type": "string", "enum": ["confirmed", "pending", "cancelled"] }
+      },
+      "required": ["eventId", "status"]
+    },
+    "Lead": {
+      "title": "Captured Lead",
+      "description": "Student information captured by a recruiter.",
+      "type": "object",
+      "properties": {
+        "recruiterId": { "type": "string" },
+        "studentId": { "type": "string" },
+        "studentName": { "type": "string" },
+        "studentEmail": { "type": "string" },
+        "studentPhotoUrl": { "type": "string" },
+        "studentSchool": { "type": "string" },
+        "studentMajor": { "type": "string" },
+        "studentGradYear": { "type": "string" },
+        "studentPhone": { "type": "string" },
+        "studentWorkAuth": { "type": "string" },
+        "studentResumeUrl": { "type": "string" },
+        "studentPreferredContact": { "type": "string" },
+        "studentInterests": { "type": "array", "items": { "type": "string" } },
+        "notes": { "type": "string" },
+        "scannedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["recruiterId", "studentId", "studentEmail"]
+    },
+    "Sponsor": {
+      "title": "Event Sponsor",
+      "description": "A company or organization sponsoring an expo event.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "eventId": { "type": "string" },
+        "name": { "type": "string" },
+        "logoUrl": { "type": "string" },
+        "tier": { "type": "string", "enum": ["platinum", "gold", "silver", "exhibitor"] },
+        "websiteUrl": { "type": "string" },
+        "description": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["eventId", "name", "logoUrl", "tier"]
+    },
+    "EventUpdate": {
+      "title": "Event Update",
+      "description": "Real-time updates and announcements for an event.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "eventId": { "type": "string" },
+        "message": { "type": "string" },
+        "type": { "type": "string", "enum": ["info", "warning", "alert"] },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["eventId", "message", "type", "createdAt"]
     }
   },
   "firestore": {
     "/users/{userId}": {
       "schema": "User",
       "description": "Stores user profiles."
+    },
+    "/users/{userId}/registrations/{eventId}": {
+      "schema": "Registration",
+      "description": "Stores event registrations for a specific user."
+    },
+    "/leads/{leadId}": {
+      "schema": "Lead",
+      "description": "Stores leads captured by recruiters."
     },
     "/events/{eventId}": {
       "schema": "Event",
@@ -93,6 +171,14 @@
     "/events/{eventId}/feedback/{feedbackId}": {
       "schema": "Feedback",
       "description": "Stores user feedback for a specific event."
+    },
+    "/events/{eventId}/sponsors/{sponsorId}": {
+      "schema": "Sponsor",
+      "description": "Stores sponsors for a specific event."
+    },
+    "/events/{eventId}/updates/{updateId}": {
+      "schema": "EventUpdate",
+      "description": "Stores real-time updates for a specific event."
     },
     "/users/{userId}/notifications/{notifId}": {
       "schema": "Notification",

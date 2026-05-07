@@ -2,18 +2,22 @@ import React, { useState, useEffect, createContext, useContext } from 'react';
 import { 
   auth, 
   db, 
+  storage,
   googleProvider, 
   facebookProvider,
   appleProvider,
   handleFirestoreError, 
   OperationType 
 } from './firebase';
+import { ref, uploadBytesResumable, getDownloadURL } from 'firebase/storage';
 import { 
   onAuthStateChanged, 
   signInWithPopup, 
   signInWithEmailAndPassword,
   createUserWithEmailAndPassword,
+  sendPasswordResetEmail,
   signOut, 
+  updateProfile,
   User as FirebaseUser 
 } from 'firebase/auth';
 import { 
@@ -31,9 +35,8 @@ import {
   updateDoc,
   deleteDoc,
   writeBatch,
-  arrayUnion,
-  arrayRemove,
-  Timestamp 
+  Timestamp,
+  deleteField
 } from 'firebase/firestore';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
@@ -56,6 +59,7 @@ import {
   Trash2,
   Edit2,
   Share2,
+  Send,
   Star,
   ZoomIn,
   ZoomOut,
@@ -68,13 +72,26 @@ import {
   Plus,
   Mail,
   Lock,
-  Bookmark,
   Briefcase,
   ExternalLink,
   Facebook,
   Linkedin,
   Twitter,
-  Apple
+  Apple,
+  QrCode,
+  ScanLine,
+  UserPlus,
+  Phone,
+  FileText,
+  MapPin,
+  Camera,
+  AlertTriangle,
+  MessageSquare,
+  LayoutDashboard,
+  Settings,
+  Eye,
+  EyeOff,
+  Upload
 } from 'lucide-react';
 import { 
   format, 
@@ -90,16 +107,64 @@ import {
   parseISO
 } from 'date-fns';
 import { TransformWrapper, TransformComponent } from 'react-zoom-pan-pinch';
+import { MapContainer, TileLayer, Marker, Popup, ImageOverlay, useMap } from 'react-leaflet';
+import L from 'leaflet';
+import { QRCodeCanvas } from 'qrcode.react';
+import { Html5QrcodeScanner } from 'html5-qrcode';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
+
+// --- Leaflet Icon Fix ---
+const icon = L.icon({
+  iconUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png',
+  shadowUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png',
+  iconSize: [25, 41],
+  iconAnchor: [12, 41],
+  popupAnchor: [1, -34],
+});
+L.Marker.prototype.options.icon = icon;
 
 // --- Utils ---
 function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
+const isWorkshopHappeningNow = (timeStr: string) => {
+  const now = new Date();
+  const match = timeStr.match(/(\d+):(\d+) (AM|PM)/);
+  if (!match) return false;
+  let [_, hr, mn, ampm] = match;
+  let hour = parseInt(hr, 10);
+  if (ampm === 'PM' && hour < 12) hour += 12;
+  if (ampm === 'AM' && hour === 12) hour = 0;
+  
+  const Math_floor = Math.floor;
+  
+  const seminarStart = new Date(now);
+  seminarStart.setHours(hour, parseInt(mn, 10), 0, 0);
+  // Assume seminar is 1 hour long
+  const seminarEnd = new Date(seminarStart.getTime() + 60 * 60 * 1000);
+  
+  return now >= seminarStart && now <= seminarEnd;
+};
+
+const isWorkshopUpcoming = (timeStr: string) => {
+  const now = new Date();
+  const match = timeStr.match(/(\d+):(\d+) (AM|PM)/);
+  if (!match) return false;
+  let [_, hr, mn, ampm] = match;
+  let hour = parseInt(hr, 10);
+  if (ampm === 'PM' && hour < 12) hour += 12;
+  if (ampm === 'AM' && hour === 12) hour = 0;
+  
+  const seminarStart = new Date(now);
+  seminarStart.setHours(hour, parseInt(mn, 10), 0, 0);
+  
+  return now < seminarStart && (seminarStart.getTime() - now.getTime()) < 2 * 60 * 60 * 1000;
+};
+
 // --- Types ---
-type Role = 'student' | 'parent' | 'admin';
+type Role = 'student' | 'parent' | 'admin' | 'recruiter';
 
 interface AppUser {
   uid: string;
@@ -107,11 +172,38 @@ interface AppUser {
   displayName: string;
   role: Role;
   school?: string;
-  major?: string;
   graduationYear?: string;
+  major?: string;
   interests?: string[];
-  savedEvents?: string[];
+  linkedin?: string;
+  phone?: string;
+  photoURL?: string;
+  resumeUrl?: string; // URL to the hosted resume document
+  workAuthorization?: 'authorized' | 'requires-sponsorship' | 'not-authorized';
+  preferredContact?: 'email' | 'phone' | 'linkedin';
+  unlockedEvents?: string[];
   createdAt: string;
+}
+
+interface Lead {
+  id: string;
+  recruiterId: string;
+  eventId?: string;
+  studentId: string;
+  studentName: string;
+  studentEmail: string;
+  studentPhotoUrl?: string;
+  studentSchool?: string;
+  studentMajor?: string;
+  studentGradYear?: string;
+  studentInterests?: string[];
+  studentLinkedin?: string;
+  studentPhone?: string;
+  studentWorkAuth?: string;
+  studentResumeUrl?: string;
+  studentPreferredContact?: string;
+  notes?: string;
+  scannedAt: string;
 }
 
 interface ExpoEvent {
@@ -120,9 +212,12 @@ interface ExpoEvent {
   city: string;
   date: string;
   time: string;
+  timezone?: string;
   location: string;
   description: string;
   mapUrl: string;
+  floorPlanUrl?: string;
+  status?: 'published' | 'draft';
 }
 
 interface Seminar {
@@ -134,6 +229,7 @@ interface Seminar {
   room: string;
   category: string;
   description?: string;
+  status?: 'published' | 'draft';
 }
 
 interface Notification {
@@ -154,6 +250,40 @@ interface Feedback {
   createdAt: string;
 }
 
+interface Sponsor {
+  id: string;
+  eventId: string;
+  name: string;
+  logoUrl: string;
+  tier: 'platinum' | 'gold' | 'silver' | 'bronze' | 'exhibitor';
+  websiteUrl?: string;
+  description?: string;
+  boothId?: number;
+  createdAt: string;
+}
+
+const PLACEHOLDER_BOOTHS = [
+  { id: 1, name: 'Main Presentation Stage', y: 450, x: 500, type: 'stage', description: 'Main hall for keynote speeches and scholarship giveaways.' },
+  { id: 2, name: 'HBCU Hub', y: 350, x: 250, type: 'booth', description: 'Central gathering for all HBCU representatives.' },
+  { id: 3, name: 'UCLA Admissions', y: 350, x: 750, type: 'booth', description: 'Official UCLA information booth.' },
+  { id: 4, name: 'Google Tech Center', y: 650, x: 300, type: 'booth', description: 'Internship and career opportunities at Google.' },
+  { id: 5, name: 'Main Registration', y: 880, x: 500, type: 'service', description: 'Check-in and materials distribution.' },
+  { id: 6, name: 'Food & Refreshments', y: 120, x: 500, type: 'service', description: 'Snacks and drinks available here.' },
+  { id: 7, name: 'Seminar Room A', y: 750, x: 180, type: 'seminar', description: 'Workshops about financial aid and FAFSA.' },
+  { id: 8, name: 'Seminar Room B', y: 750, x: 820, type: 'seminar', description: 'Writing the perfect college essay workshops.' },
+  { id: 9, name: 'NCRF Admin Help', y: 200, x: 200, type: 'service', description: 'General foundation assistance.' },
+  { id: 10, name: 'Sponsorship VIP Lounge', y: 200, x: 800, type: 'booth', description: 'Exclusive area for event sponsors.' },
+];
+
+interface EventUpdate {
+  id: string;
+  eventId: string;
+  message: string;
+  type: 'info' | 'warning' | 'alert';
+  targetAudience?: 'all' | 'student' | 'parent' | 'recruiter' | 'admin';
+  createdAt: string;
+}
+
 interface ScholarshipApplication {
   id: string;
   name: string;
@@ -161,6 +291,9 @@ interface ScholarshipApplication {
   amount: number;
   deadline: string;
   status: 'pending' | 'awarded' | 'rejected' | 'draft';
+  essay?: string;
+  documents?: { name: string, url: string, type: string }[];
+  notes?: string;
 }
 
 // --- Context ---
@@ -252,6 +385,781 @@ const getShareLinks = (event: ExpoEvent) => {
 
 // --- Components ---
 
+// --- Components ---
+
+const StudentDigitalCard = ({ user }: { user: AppUser }) => {
+  const cardData = JSON.stringify({
+    uid: user.uid,
+    name: user.displayName,
+    email: user.email,
+    photo: user.photoURL || '',
+    school: user.school || 'N/A',
+    gradYear: user.graduationYear || 'N/A',
+    major: user.major || 'N/A',
+    interests: user.interests || [],
+    linkedin: user.linkedin || '',
+    phone: user.phone || '',
+    workAuth: user.workAuthorization || 'authorized',
+    resumeUrl: user.resumeUrl || '',
+    prefContact: user.preferredContact || 'email',
+    type: 'expo-lead-v1'
+  });
+
+  const handleDownloadQR = () => {
+    const canvas = document.getElementById('student-qr-canvas') as HTMLCanvasElement;
+    if (!canvas) return;
+    
+    const pngUrl = canvas
+      .toDataURL("image/png")
+      .replace("image/png", "image/octet-stream");
+    
+    const downloadLink = document.createElement("a");
+    downloadLink.href = pngUrl;
+    downloadLink.download = `${user.displayName.replace(/\s+/g, '_')}_QR.png`;
+    document.body.appendChild(downloadLink);
+    downloadLink.click();
+    document.body.removeChild(downloadLink);
+  };
+
+  return (
+    <div className="max-w-md mx-auto">
+      <div className="bg-white rounded-2xl shadow-xl overflow-hidden border border-[#E4E6EB]">
+        <div className="bg-[#D32F2F] p-8 text-center text-white">
+          <div className="w-24 h-24 bg-white/20 rounded-full flex items-center justify-center mx-auto mb-4 border-4 border-white/30 overflow-hidden shadow-inner">
+            {user.photoURL ? (
+              <img src={user.photoURL} alt={user.displayName} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+            ) : (
+              <UserIcon className="w-12 h-12 text-white" />
+            )}
+          </div>
+          <h2 className="text-2xl font-bold">{user.displayName}</h2>
+          <p className="text-white/80 text-sm mt-1">{user.school || 'College Applicant'}</p>
+        </div>
+        
+        <div className="p-8 flex flex-col items-center">
+          <div className="flex flex-col items-center gap-4 mb-8 w-full">
+            <div className="bg-white p-4 rounded-xl shadow-md border border-[#E4E6EB]">
+              <QRCodeCanvas 
+                id="student-qr-canvas"
+                value={cardData} 
+                size={200}
+                level="H"
+                includeMargin={true}
+                imageSettings={{
+                  src: "https://upload.wikimedia.org/wikipedia/commons/4/41/QR_Code_Example.svg", // Placeholder or app logo
+                  x: undefined,
+                  y: undefined,
+                  height: 40,
+                  width: 40,
+                  excavate: true,
+                }}
+              />
+            </div>
+            <button 
+              onClick={handleDownloadQR}
+              className="flex items-center gap-2 px-4 py-2 bg-[#F0F2F5] hover:bg-[#E4E6EB] text-[#1C1E21] font-bold rounded-lg transition-colors text-sm shadow-sm border border-[#E4E6EB]"
+            >
+              <Download className="w-4 h-4" />
+              Download PNG
+            </button>
+          </div>
+          
+          <div className="w-full space-y-4">
+            <div className="flex items-center gap-4 p-4 bg-[#F8F9FA] rounded-xl border border-[#E4E6EB]">
+              <div className="w-10 h-10 bg-white rounded-lg flex items-center justify-center shadow-sm">
+                <Mail className="w-5 h-5 text-[#D32F2F]" />
+              </div>
+              <div>
+                <div className="text-[10px] text-[#606770] font-bold uppercase">Email Address</div>
+                <div className="text-[14px] font-medium text-[#1C1E21]">{user.email}</div>
+              </div>
+            </div>
+
+            {user.graduationYear && (
+              <div className="flex items-center gap-4 p-4 bg-[#F8F9FA] rounded-xl border border-[#E4E6EB]">
+                <div className="w-10 h-10 bg-white rounded-lg flex items-center justify-center shadow-sm">
+                  <GraduationCap className="w-5 h-5 text-[#D32F2F]" />
+                </div>
+                <div>
+                  <div className="text-[10px] text-[#606770] font-bold uppercase">Expected Graduation</div>
+                  <div className="text-[14px] font-medium text-[#1C1E21]">{user.graduationYear}</div>
+                </div>
+              </div>
+            )}
+
+            {user.phone && (
+              <div className="flex items-center gap-4 p-4 bg-[#F8F9FA] rounded-xl border border-[#E4E6EB]">
+                <div className="w-10 h-10 bg-white rounded-lg flex items-center justify-center shadow-sm">
+                  <Phone className="w-5 h-5 text-[#D32F2F]" />
+                </div>
+                <div>
+                  <div className="text-[10px] text-[#606770] font-bold uppercase">Phone Number</div>
+                  <div className="text-[14px] font-medium text-[#1C1E21]">{user.phone}</div>
+                </div>
+              </div>
+            )}
+
+            {user.workAuthorization && (
+              <div className="flex items-center gap-4 p-4 bg-[#F8F9FA] rounded-xl border border-[#E4E6EB]">
+                <div className="w-10 h-10 bg-white rounded-lg flex items-center justify-center shadow-sm">
+                  <Briefcase className="w-5 h-5 text-[#D32F2F]" />
+                </div>
+                <div>
+                  <div className="text-[10px] text-[#606770] font-bold uppercase">Work Authorization</div>
+                  <div className="text-[14px] font-medium text-[#1C1E21]">
+                    {user.workAuthorization === 'authorized' ? 'Legally Authorized' : user.workAuthorization === 'requires-sponsorship' ? 'Requires Sponsorship' : 'Not Authorized'}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {user.preferredContact && (
+               <div className="flex items-center gap-4 p-4 bg-[#F8F9FA] rounded-xl border border-[#E4E6EB]">
+                 <div className="w-10 h-10 bg-white rounded-lg flex items-center justify-center shadow-sm">
+                   <MessageSquare className="w-5 h-5 text-[#D32F2F]" />
+                 </div>
+                 <div>
+                   <div className="text-[10px] text-[#606770] font-bold uppercase">Preferred Contact</div>
+                   <div className="text-[14px] font-medium capitalize text-[#1C1E21]">{user.preferredContact}</div>
+                 </div>
+               </div>
+            )}
+
+            {user.interests && user.interests.length > 0 && (
+              <div className="flex flex-wrap gap-2 pt-2">
+                {user.interests.map((interest, i) => (
+                  <span key={i} className="px-3 py-1 bg-[#EEF2FF] text-[#4F46E5] text-[12px] font-bold rounded-full border border-[#D1D5DB]">
+                    {interest}
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="p-4 bg-[#F0F2F5] border-t border-[#E4E6EB] text-center">
+          <p className="text-[12px] text-[#606770]">Show this QR code to recruiters to share your profile.</p>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const LeadScanner = ({ user, events }: { user: AppUser, events: ExpoEvent[] }) => {
+  const [scanResult, setScanResult] = useState<any | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [notes, setNotes] = useState('');
+  const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
+  const [showSuccess, setShowSuccess] = useState(false);
+  const [successName, setSuccessName] = useState('');
+
+  const hasAccess = selectedEventId ? ((user.unlockedEvents || []).includes(selectedEventId) || (user.unlockedEvents || []).includes('all_events')) : false;
+
+  const handleCheckout = async (mode: 'single' | 'all') => {
+    if (!selectedEventId) return;
+    try {
+      const response = await fetch('/api/create-checkout-session', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          recruiterId: user.uid,
+          eventId: mode === 'all' ? 'all_events' : selectedEventId,
+          totalCount: mode === 'all' ? events.length : 1
+        })
+      });
+
+      const data = await response.json();
+      if (data.url) {
+        window.location.href = data.url;
+      } else {
+        alert('Error initiating checkout: ' + (data.error || 'Unknown error'));
+      }
+    } catch (error) {
+      console.error('Checkout error:', error);
+      alert('Could not connect to payment server.');
+    }
+  };
+
+  useEffect(() => {
+    // Only mount scanner if unlocked
+    if (!hasAccess || scanResult || showSuccess) return;
+
+    const scanner = new Html5QrcodeScanner(
+      "reader", 
+      { fps: 10, qrbox: { width: 250, height: 250 } }, 
+      /* verbose= */ false
+    );
+
+    scanner.render((decodedText) => {
+      try {
+        const data = JSON.parse(decodedText);
+        if (data.type === 'expo-lead-v1') {
+          setScanResult(data);
+          scanner.clear();
+        } else {
+          setError('Invalid QR code type. Please scan an Expo Student Card.');
+        }
+      } catch (err) {
+        setError('Could not read QR code. Please try again.');
+      }
+    }, (err) => {
+      // Silent error during scanning
+    });
+
+    return () => {
+      scanner.clear().catch(error => console.error("Failed to clear html5QrcodeScanner", error));
+    };
+  }, [hasAccess, scanResult, showSuccess]);
+
+  const handleSaveLead = async () => {
+    if (!scanResult) return;
+    setSaving(true);
+    try {
+      const leadData: Omit<Lead, 'id'> = {
+        recruiterId: user.uid,
+        eventId: selectedEventId || '',
+        studentId: scanResult.uid,
+        studentName: scanResult.name,
+        studentEmail: scanResult.email,
+        studentPhotoUrl: scanResult.photo,
+        studentSchool: scanResult.school,
+        studentMajor: scanResult.major,
+        studentGradYear: scanResult.gradYear,
+        studentInterests: scanResult.interests,
+        studentLinkedin: scanResult.linkedin,
+        studentPhone: scanResult.phone,
+        studentWorkAuth: scanResult.workAuth,
+        studentResumeUrl: scanResult.resumeUrl,
+        studentPreferredContact: scanResult.prefContact,
+        notes,
+        scannedAt: new Date().toISOString()
+      };
+
+      await addDoc(collection(db, 'leads'), leadData);
+      setSuccessName(scanResult.name);
+      setShowSuccess(true);
+      setScanResult(null);
+      setNotes('');
+    } catch (err) {
+      handleFirestoreError(err, OperationType.CREATE, 'leads');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="max-w-2xl mx-auto space-y-6">
+      <div className="bg-white rounded-2xl shadow-sm border border-[#E4E6EB] p-6">
+        <label className="block text-[12px] font-bold text-[#606770] uppercase mb-2">Select Event to Scan For</label>
+        <select 
+          value={selectedEventId || ''} 
+          onChange={(e) => setSelectedEventId(e.target.value)}
+          className="w-full p-3 bg-[#F8F9FA] border border-[#E4E6EB] rounded-xl outline-none focus:border-[#1976D2]"
+        >
+          <option value="" disabled>Select an event...</option>
+          {events.map((e) => (
+             <option key={e.id} value={e.id}>{e.name} ({e.city})</option>
+          ))}
+        </select>
+      </div>
+
+      {!selectedEventId ? (
+         <div className="bg-white rounded-2xl shadow-sm border border-[#E4E6EB] p-12 text-center text-[#606770]">
+           Please select an event to continue.
+         </div>
+      ) : !hasAccess ? (
+         <div className="bg-white rounded-2xl shadow-sm border border-[#E4E6EB] p-8 text-center">
+           <div className="w-16 h-16 bg-[#FFF5F5] rounded-full flex items-center justify-center mx-auto mb-4">
+             <Lock className="w-8 h-8 text-[#D32F2F]" />
+           </div>
+           <h2 className="text-xl font-black text-[#1C1E21] mb-2">Unlock QR Scanning</h2>
+           <p className="text-[#606770] text-[14px] max-w-md mx-auto mb-6">Capture leads instantly by scanning student QR cards. Upgrade your access for this event for just $25.</p>
+           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-left">
+             <div className="p-6 border-2 border-[#E4E6EB] rounded-2xl flex flex-col hover:border-[#1976D2] transition-colors relative">
+                <h3 className="text-lg font-bold text-[#1C1E21] mb-1">Single Event Pass</h3>
+                <p className="text-[#606770] text-[13px] mb-4 flex-grow">Unlock lead scanning for the currently selected event only.</p>
+                <div className="text-3xl font-black text-[#1C1E21] mb-4">$25<span className="text-[14px] font-medium text-[#606770]">/event</span></div>
+                <button 
+                  onClick={() => handleCheckout('single')}
+                  className="w-full py-3 bg-white border border-[#1976D2] text-[#1976D2] font-bold rounded-xl hover:bg-[#F0F7FF] transition-colors shadow-sm"
+                >
+                  Select Single Event
+                </button>
+             </div>
+
+             <div className="p-6 border-2 border-[#1976D2] bg-[#F0F7FF] rounded-2xl flex flex-col relative shadow-md">
+                <div className="absolute top-0 right-0 bg-[#1976D2] text-white text-[10px] uppercase tracking-widest font-bold px-3 py-1 rounded-bl-lg rounded-tr-xl">Best Value</div>
+                <h3 className="text-lg font-bold text-[#1C1E21] mb-1">All Events Pass</h3>
+                <p className="text-[#606770] text-[13px] mb-4 flex-grow">Unlock lead scanning for every active Expo event. (5% Discount applied)</p>
+                <div className="text-3xl font-black text-[#1C1E21] mb-4">${Math.floor(events.length * 25 * 0.95)}<span className="text-[14px] font-medium text-[#606770]">/all</span></div>
+                <button 
+                  onClick={() => handleCheckout('all')}
+                  className="w-full py-3 bg-[#1976D2] text-white font-bold rounded-xl hover:bg-[#1565C0] transition-colors shadow-md"
+                >
+                  Select All Events
+                </button>
+             </div>
+           </div>
+         </div>
+      ) : showSuccess ? (
+        <div className="bg-white rounded-2xl shadow-xl border border-[#E4E6EB] p-12 text-center">
+          <div className="w-20 h-20 bg-[#E8F5E9] rounded-full flex items-center justify-center mx-auto mb-6">
+            <CheckCircle className="w-10 h-10 text-[#2E7D32]" />
+          </div>
+          <h2 className="text-3xl font-black text-[#1C1E21] mb-2 tracking-tight">{successName} Saved!</h2>
+          <p className="text-[#606770] mb-8 font-medium">The lead has been successfully added to your database.</p>
+          <button 
+            onClick={() => setShowSuccess(false)}
+            className="px-8 py-3.5 bg-[#1976D2] text-white font-bold rounded-xl hover:bg-[#1565C0] transition-all shadow-md hover:shadow-lg flex items-center justify-center gap-2 mx-auto disabled:opacity-50 active:scale-[0.98]"
+          >
+            <ScanLine className="w-5 h-5" />
+            Scan Next Student
+          </button>
+        </div>
+      ) : !scanResult ? (
+        <div className="bg-white rounded-2xl shadow-sm border border-[#E4E6EB] p-6 text-center">
+          <h2 className="text-xl font-bold text-[#1C1E21] mb-2 flex items-center justify-center gap-2">
+            <ScanLine className="w-6 h-6 text-[#D32F2F]" />
+            Scan Student Card
+          </h2>
+          <p className="text-[#606770] text-sm mb-6">Scan a student's digital QR card to capture their contact information.</p>
+          
+          <div id="reader" className="w-full max-w-sm mx-auto overflow-hidden rounded-xl border-4 border-[#F0F2F5]"></div>
+          
+          {error && (
+            <div className="mt-4 p-4 bg-[#FFF5F5] text-[#D32F2F] rounded-lg text-sm border border-[#FFEBEE]">
+              {error}
+              <button onClick={() => setError(null)} className="ml-2 underline font-bold uppercase text-[10px]">Retry</button>
+            </div>
+          )}
+        </div>
+      ) : (
+        <motion.div 
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="bg-white rounded-2xl shadow-xl border border-[#E4E6EB] overflow-hidden"
+        >
+          <div className="bg-[#1976D2] p-6 text-white flex items-center justify-between">
+            <div>
+              <h2 className="text-xl font-bold">New Lead Found!</h2>
+              <p className="text-white/80 text-sm">{scanResult.name}</p>
+            </div>
+            <div className="w-12 h-12 bg-white/20 rounded-full flex items-center justify-center">
+              <UserPlus className="w-6 h-6" />
+            </div>
+          </div>
+
+          <div className="p-6 space-y-6">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="p-4 bg-[#F8F9FA] rounded-xl border border-[#E4E6EB]">
+                <div className="text-[10px] text-[#606770] font-bold uppercase mb-1">School & Major</div>
+                <div className="text-[14px] font-medium">{scanResult.school} - {scanResult.major || 'Undecided'}</div>
+              </div>
+              <div className="p-4 bg-[#F8F9FA] rounded-xl border border-[#E4E6EB]">
+                <div className="text-[10px] text-[#606770] font-bold uppercase mb-1">Grad Year & Auth</div>
+                <div className="text-[14px] font-medium">{scanResult.gradYear} / {scanResult.workAuth === 'authorized' ? '✅ Authorized' : '⚠️ Requires Sponsorship'}</div>
+              </div>
+              <div className="p-4 bg-[#F8F9FA] rounded-xl border border-[#E4E6EB]">
+                <div className="text-[10px] text-[#606770] font-bold uppercase mb-1">Email</div>
+                <div className="text-[14px] font-medium">{scanResult.email}</div>
+              </div>
+              <div className="p-4 bg-[#F8F9FA] rounded-xl border border-[#E4E6EB]">
+                <div className="text-[10px] text-[#606770] font-bold uppercase mb-1">Phone</div>
+                <div className="text-[14px] font-medium">{scanResult.phone || 'N/A'}</div>
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-[12px] font-bold text-[#606770] uppercase mb-2">Interaction Notes</label>
+              <textarea 
+                value={notes}
+                onChange={(e) => setNotes(e.target.value)}
+                placeholder="What did you talk about? e.g. Interested in Biology, prospective athlete..."
+                className="w-full p-4 bg-[#F8F9FA] border border-[#E4E6EB] rounded-xl focus:ring-2 focus:ring-[#1976D2] outline-none h-32 transition-all"
+              />
+            </div>
+
+            <div className="flex gap-3">
+              <button 
+                onClick={handleSaveLead}
+                disabled={saving}
+                className="flex-grow py-3 bg-[#1976D2] text-white font-bold rounded-xl hover:bg-[#1565C0] transition-colors shadow-md flex items-center justify-center gap-2"
+              >
+                {saving ? <Loader2 className="w-5 h-5 animate-spin" /> : <CheckCircle className="w-5 h-5" />}
+                Save Lead
+              </button>
+              <button 
+                onClick={() => setScanResult(null)}
+                className="px-6 py-3 bg-[#F0F2F5] text-[#606770] font-bold rounded-xl hover:bg-[#E4E6EB] transition-colors"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </motion.div>
+      )}
+    </div>
+  );
+};
+
+const LeadsList = ({ user }: { user: AppUser }) => {
+  const [leads, setLeads] = useState<Lead[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [sortField, setSortField] = useState<'scannedAt' | 'studentName' | 'studentSchool'>('scannedAt');
+  const [sortOrder, setSortOrder] = useState<'desc' | 'asc'>('desc');
+  const [recruiterFilter, setRecruiterFilter] = useState<string>('all');
+
+  useEffect(() => {
+    const q = user.role === 'admin' 
+      ? query(collection(db, 'leads'))
+      : query(collection(db, 'leads'), where('recruiterId', '==', user.uid));
+    
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const fetched = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Lead));
+      setLeads(fetched);
+      setLoading(false);
+    }, (error) => {
+      handleFirestoreError(error, OperationType.GET, 'leads');
+    });
+    return unsubscribe;
+  }, [user]);
+
+  const uniqueRecruiters: string[] = user.role === 'admin' 
+    ? Array.from(new Set(leads.map(l => l.recruiterId))) 
+    : [];
+
+  const filteredAndSortedLeads = leads
+    .filter(l => recruiterFilter === 'all' || l.recruiterId === recruiterFilter)
+    .sort((a, b) => {
+      let comparison = 0;
+      if (sortField === 'studentName') {
+        comparison = a.studentName.localeCompare(b.studentName);
+      } else if (sortField === 'studentSchool') {
+        const schoolA = a.studentSchool || 'Z'; // Push empty to bottom if sorting A-Z
+        const schoolB = b.studentSchool || 'Z';
+        comparison = schoolA.localeCompare(schoolB);
+      } else {
+        const dateA = new Date(a.scannedAt).getTime();
+        const dateB = new Date(b.scannedAt).getTime();
+        comparison = dateA - dateB;
+      }
+      return sortOrder === 'desc' ? -comparison : comparison;
+    });
+
+  const downloadCSV = () => {
+    const headers = ['Name', 'Email', 'Phone', 'School', 'Major', 'Grad Year', 'Work Auth', 'Interests', 'Resume URL', 'Preferred Contact', 'Notes', 'Scanned At'];
+    const rows = filteredAndSortedLeads.map(l => [
+      l.studentName,
+      l.studentEmail,
+      l.studentPhone || 'N/A',
+      l.studentSchool,
+      l.studentMajor || 'N/A',
+      l.studentGradYear || 'N/A',
+      l.studentWorkAuth || 'authorized',
+      l.studentInterests?.join(', ') || 'N/A',
+      l.studentResumeUrl || 'N/A',
+      l.studentPreferredContact || 'email',
+      l.notes?.replace(/,/g, ';') || '',
+      format(new Date(l.scannedAt), 'yyyy-MM-dd HH:mm')
+    ]);
+
+    const csvContent = "data:text/csv;charset=utf-8," 
+      + headers.join(",") + "\n"
+      + rows.map(e => e.join(",")).join("\n");
+
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement("a");
+    link.setAttribute("href", encodedUri);
+    link.setAttribute("download", `expo_leads_${format(new Date(), 'yyyyMMdd')}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  if (loading) return <div className="p-20 flex justify-center"><Loader2 className="w-8 h-8 animate-spin text-[#D32F2F]" /></div>;
+
+  return (
+    <div className="space-y-6">
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+        <div>
+          <h2 className="text-xl font-bold text-[#1C1E21]">Captured Leads</h2>
+          <p className="text-sm text-[#606770]">{filteredAndSortedLeads.length} students captured</p>
+        </div>
+        <div className="flex flex-wrap items-center gap-3">
+          {user.role === 'admin' && (
+            <select
+              value={recruiterFilter}
+              onChange={(e) => setRecruiterFilter(e.target.value)}
+              className="px-3 py-2 bg-white border border-[#E4E6EB] text-[#1C1E21] text-[13px] rounded-lg outline-none focus:border-[#1976D2]"
+            >
+              <option value="all">All Recruiters</option>
+              {uniqueRecruiters.map(uid => (
+                <option key={uid} value={uid}>Recruiter: {uid.slice(0, 5)}...</option>
+              ))}
+            </select>
+          )}
+          <select
+            value={`${sortField}-${sortOrder}`}
+            onChange={(e) => {
+              const [field, order] = e.target.value.split('-');
+              setSortField(field as any);
+              setSortOrder(order as any);
+            }}
+            className="px-3 py-2 bg-white border border-[#E4E6EB] text-[#1C1E21] text-[13px] rounded-lg outline-none focus:border-[#1976D2]"
+          >
+            <option value="scannedAt-desc">Newest First</option>
+            <option value="scannedAt-asc">Oldest First</option>
+            <option value="studentName-asc">Name (A-Z)</option>
+            <option value="studentName-desc">Name (Z-A)</option>
+            <option value="studentSchool-asc">School (A-Z)</option>
+            <option value="studentSchool-desc">School (Z-A)</option>
+          </select>
+          {filteredAndSortedLeads.length > 0 && (
+            <button 
+              onClick={downloadCSV}
+              className="flex items-center gap-2 px-4 py-2 bg-white border border-[#E4E6EB] text-[#1C1E21] text-[13px] font-bold rounded-lg hover:bg-[#F8F9FA] transition-all shadow-sm"
+            >
+              <Download className="w-4 h-4" />
+              Export CSV
+            </button>
+          )}
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        {filteredAndSortedLeads.map(lead => (
+          <div key={lead.id} className="bg-white p-5 rounded-2xl shadow-sm border border-[#E4E6EB] hover:shadow-md transition-all group">
+            <div className="flex items-start justify-between mb-3">
+              <div className="w-10 h-10 bg-[#EEF2FF] rounded-full flex items-center justify-center text-[#4F46E5] font-bold overflow-hidden border border-[#E4E6EB]">
+                {lead.studentPhotoUrl ? (
+                  <img src={lead.studentPhotoUrl} alt="" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                ) : (
+                  lead.studentName[0]
+                )}
+              </div>
+              <div className="text-[10px] text-[#606770] font-medium">
+                {format(new Date(lead.scannedAt), 'MMM dd, h:mm a')}
+              </div>
+            </div>
+            
+            <h3 className="font-bold text-[#1C1E21]">{lead.studentName}</h3>
+            <div className="text-[12px] text-[#606770] mb-2 truncate">{lead.studentSchool}</div>
+            
+            <div className="flex flex-wrap gap-1.5 mb-3">
+              {lead.studentMajor && (
+                <span className="px-2 py-0.5 bg-[#F0F2F5] text-[#1C1E21] text-[10px] font-bold rounded border border-[#E4E6EB]">
+                  {lead.studentMajor}
+                </span>
+              )}
+              {lead.studentWorkAuth && (
+                <span className={cn(
+                  "px-2 py-0.5 text-[10px] font-bold rounded border",
+                  lead.studentWorkAuth === 'authorized' ? "bg-[#E8F5E9] text-[#2E7D32] border-[#2E7D32]/20" : "bg-[#FFF3E0] text-[#E65100] border-[#E65100]/20"
+                )}>
+                  {lead.studentWorkAuth === 'authorized' ? 'Work Authorized' : 'Needs Sponsorship'}
+                </span>
+              )}
+            </div>
+            
+            <div className="space-y-2 mb-4">
+              <div className="flex items-center gap-2 text-[12px] text-[#1C1E21]">
+                <Mail className="w-3.5 h-3.5 text-[#606770]" />
+                <span className={cn(lead.studentPreferredContact === 'email' && "font-bold text-[#1976D2]")}>
+                  {lead.studentEmail}
+                </span>
+              </div>
+              {lead.studentPhone && (
+                <div className="flex items-center gap-2 text-[12px] text-[#1C1E21]">
+                  <Phone className="w-3.5 h-3.5 text-[#606770]" />
+                  <span className={cn(lead.studentPreferredContact === 'phone' && "font-bold text-[#1976D2]")}>
+                    {lead.studentPhone}
+                  </span>
+                </div>
+              )}
+              {lead.studentLinkedin && (
+                <div className="flex items-center gap-2 text-[12px] text-[#1C1E21] mb-2">
+                  <Linkedin className="w-3.5 h-3.5 text-[#606770]" />
+                  <a href={lead.studentLinkedin} target="_blank" rel="noopener noreferrer" className={cn("hover:underline", lead.studentPreferredContact === 'linkedin' && "font-bold text-[#1976D2]")}>
+                    View LinkedIn
+                  </a>
+                </div>
+              )}
+              {lead.studentResumeUrl && (
+                <a 
+                  href={lead.studentResumeUrl} 
+                  target="_blank" 
+                  rel="noopener noreferrer"
+                  className="flex items-center gap-2 text-[12px] text-[#1976D2] font-bold hover:underline"
+                >
+                  <FileText className="w-3.5 h-3.5 animate-pulse" />
+                  View Scannable Resume
+                </a>
+              )}
+            </div>
+
+            {lead.notes && (
+              <div className="p-3 bg-[#F8F9FA] rounded-xl text-[11px] text-[#606770] italic border border-[#E4E6EB]">
+                "{lead.notes}"
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+
+      {leads.length === 0 && (
+        <div className="py-20 text-center bg-white rounded-3xl border border-dashed border-[#E4E6EB]">
+          <div className="w-16 h-16 bg-[#F8F9FA] rounded-full flex items-center justify-center mx-auto mb-4">
+            <Users className="w-8 h-8 text-[#606770] opacity-20" />
+          </div>
+          <p className="text-[#606770] italic">No leads captured yet. Start scanning to see them here.</p>
+        </div>
+      )}
+    </div>
+  );
+};
+
+const VenueInteractiveMap = ({ event, sponsors = [] }: { event: ExpoEvent, sponsors?: Sponsor[] }) => {
+  const [mapType, setMapType] = useState<'real' | 'booth'>('real');
+  
+  // Coordinates for some cities
+  const cityCoords: Record<string, [number, number]> = {
+    'Los Angeles': [34.0403, -118.2694], // LA Convention Center
+    'Atlanta': [33.7592, -84.3916], // Georgia World Congress Center
+    'Miami': [25.7907, -80.1300], // Miami Beach Convention Center
+    'New York': [40.7586, -74.0019], // Javits Center
+    'Dallas': [32.7753, -96.7997], // Kay Bailey Hutchison Convention Center
+    'Houston': [29.7516, -95.3587], // George R. Brown Convention Center
+    'Chicago': [41.8488, -87.6163], // McCormick Place
+    'Washington DC': [38.9039, -77.0232], // Walter E. Washington Convention Center
+    'Howard': [38.9227, -77.0194], // Howard University
+    'Maryland': [39.2858, -76.6170], // Baltimore Convention Center
+    'Oakland': [37.8044, -122.2711], // Oakland Convention Center
+    'Detroit': [42.3286, -83.0485], // Huntington Place
+  };
+
+  const center = cityCoords[event.city] || [39.8283, -98.5795]; // Default US center
+
+  if (mapType === 'booth' && (event.mapUrl || event.floorPlanUrl)) {
+    const bounds: L.LatLngBoundsExpression = [[0, 0], [1000, 1000]];
+    
+    return (
+      <div className="h-full w-full relative bg-[#F0F2F5] rounded overflow-hidden shadow-inner border border-[#E4E6EB]">
+        <div className="absolute top-2 right-2 z-[1000] flex flex-col gap-2">
+          <button 
+            onClick={() => setMapType('real')}
+            className="bg-white text-[10px] font-bold px-3 py-1.5 rounded shadow-sm hover:bg-[#F0F2F5] border border-[#E4E6EB]"
+          >
+            Switch to Street Map
+          </button>
+        </div>
+        <MapContainer 
+          crs={L.CRS.Simple} 
+          bounds={bounds} 
+          style={{ height: '100%', width: '100%' }}
+          attributionControl={false}
+        >
+          <ImageOverlay url={event.floorPlanUrl || event.mapUrl || ''} bounds={bounds} />
+          {PLACEHOLDER_BOOTHS.map((booth) => {
+            const boothSponsors = sponsors.filter(s => s.boothId === booth.id);
+            const sponsorHtml = boothSponsors.length > 0 
+              ? `<div style="display: flex; gap: 2px;">${boothSponsors.map(s => `<img src="${s.logoUrl}" style="width: 24px; height: 24px; border-radius: 4px; object-fit: contain; background: white; border: 1px solid #E4E6EB; box-shadow: 0 1px 2px rgba(0,0,0,0.1);" />`).join('')}</div>`
+              : `<div style="background-color: ${booth.type === 'stage' ? '#D32F2F' : booth.type === 'service' ? '#606770' : '#1976D2'}; width: 12px; height: 12px; border-radius: 50%; border: 2px solid white; box-shadow: 0 1px 3px rgba(0,0,0,0.3);"></div>`;
+
+            return (
+              <Marker 
+                key={booth.id} 
+                position={[booth.y, booth.x]}
+                icon={L.divIcon({
+                  className: 'custom-div-icon',
+                  html: sponsorHtml,
+                  iconSize: boothSponsors.length > 0 ? [24 * boothSponsors.length + (2 * (boothSponsors.length - 1)), 24] : [12, 12],
+                  iconAnchor: boothSponsors.length > 0 ? [(24 * boothSponsors.length + (2 * (boothSponsors.length - 1))) / 2, 12] : [6, 6]
+                })}
+              >
+                <Popup>
+                  <div className="p-2 min-w-[150px]">
+                    <div className="font-bold text-[14px] text-[#1C1E21]">{booth.name}</div>
+                    <div className="flex items-center gap-1.5 mt-1 mb-2">
+                      <span className={cn(
+                        "px-1.5 py-0.5 rounded-[4px] text-[9px] font-bold uppercase",
+                        booth.type === 'stage' ? "bg-[#FFF5F5] text-[#D32F2F] border border-[#FFEBEE]" :
+                        booth.type === 'booth' ? "bg-[#E3F2FD] text-[#1976D2] border border-[#BBDEFB]" :
+                        "bg-[#F5F5F5] text-[#606770] border border-[#EEEEEE]"
+                      )}>
+                        {booth.type}
+                      </span>
+                    </div>
+                    <div className="text-[11px] text-[#606770] leading-relaxed">
+                      {booth.description}
+                    </div>
+                    {boothSponsors.length > 0 && (
+                      <div className="mt-2 pt-2 border-t border-[#F0F2F5]">
+                        <div className="text-[10px] font-bold text-[#606770] uppercase mb-1">Sponsored By:</div>
+                        <div className="flex flex-col gap-1.5">
+                          {boothSponsors.map(s => (
+                            <div key={s.id} className="flex items-center gap-2">
+                              {s.logoUrl ? (
+                                <img src={s.logoUrl} alt={s.name} className="w-6 h-6 object-contain rounded border border-[#E4E6EB]" />
+                              ) : (
+                                <div className="w-6 h-6 rounded bg-gray-100 border flex items-center justify-center">
+                                  <span className="text-[8px] font-bold">Logo</span>
+                                </div>
+                              )}
+                              <span className="text-[12px] font-medium">{s.name}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </Popup>
+              </Marker>
+            );
+          })}
+        </MapContainer>
+      </div>
+    );
+  }
+
+  return (
+    <div className="h-full w-full relative rounded overflow-hidden border border-[#E4E6EB]">
+      {(event.mapUrl || event.floorPlanUrl) && (
+        <div className="absolute top-2 right-2 z-[1000] flex flex-col gap-2">
+          <button 
+            onClick={() => setMapType('booth')}
+            className="bg-white text-[10px] font-bold px-3 py-1.5 rounded shadow-sm hover:bg-[#F0F2F5] border border-[#E4E6EB]"
+          >
+            {event.floorPlanUrl ? 'View Floor Plan' : 'View Booth Layout'}
+          </button>
+        </div>
+      )}
+      <MapContainer 
+        center={center as L.LatLngExpression} 
+        zoom={13} 
+        style={{ height: '100%', width: '100%' }}
+        scrollWheelZoom={false}
+      >
+        <TileLayer
+          attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+          url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+        />
+        <Marker position={center as L.LatLngExpression}>
+          <Popup>
+            <div className="p-1">
+              <div className="font-bold text-[13px]">{event.name}</div>
+              <div className="text-[11px] font-medium text-[#D32F2F]">{event.location}</div>
+              <div className="text-[10px] text-gray-500 italic mt-1">{event.city} Convention Venue</div>
+            </div>
+          </Popup>
+        </Marker>
+      </MapContainer>
+    </div>
+  );
+};
+
 const EventDetails = ({ event, onBack, onEdit }: { event: ExpoEvent, onBack: () => void, onEdit?: (event: ExpoEvent) => void }) => {
   const { user } = useContext(UserContext);
   const [seminars, setSeminars] = useState<Seminar[]>([]);
@@ -274,12 +1182,47 @@ const EventDetails = ({ event, onBack, onEdit }: { event: ExpoEvent, onBack: () 
   const [loadingSeminars, setLoadingSeminars] = useState(true);
   const [loadingFeedback, setLoadingFeedback] = useState(true);
   const [loadingRegistration, setLoadingRegistration] = useState(true);
+  const [sponsors, setSponsors] = useState<Sponsor[]>([]);
+  const [loadingSponsors, setLoadingSponsors] = useState(true);
+  const [updates, setUpdates] = useState<EventUpdate[]>([]);
+  const [loadingUpdates, setLoadingUpdates] = useState(true);
   const [eventRegistrants, setEventRegistrants] = useState<any[]>([]);
   const [loadingEventRegistrants, setLoadingEventRegistrants] = useState(false);
+  const [editingReg, setEditingReg] = useState<any | null>(null);
   const [updatingRegStatus, setUpdatingRegStatus] = useState(false);
-  const [togglingSave, setTogglingSave] = useState(false);
 
-  const isSaved = user?.savedEvents?.includes(event.id) || false;
+  useEffect(() => {
+    setLoadingUpdates(true);
+    const updatesRef = collection(db, 'events', event.id, 'updates');
+    const q = query(updatesRef, orderBy('createdAt', 'desc'));
+    
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const fetched = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as EventUpdate))
+        .filter(u => !u.targetAudience || u.targetAudience === 'all' || u.targetAudience === user?.role);
+      setUpdates(fetched);
+      setLoadingUpdates(false);
+    }, (err) => {
+      console.error("Updates fetch error:", err);
+      setLoadingUpdates(false);
+    });
+    return () => unsubscribe();
+  }, [event.id]);
+
+  useEffect(() => {
+    setLoadingSponsors(true);
+    const sponsorsRef = collection(db, 'events', event.id, 'sponsors');
+    const q = query(sponsorsRef, orderBy('createdAt', 'desc'));
+    
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const fetched = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Sponsor));
+      setSponsors(fetched);
+      setLoadingSponsors(false);
+    }, (err) => {
+      console.error("Sponsor fetch error:", err);
+      setLoadingSponsors(false);
+    });
+    return () => unsubscribe();
+  }, [event.id]);
 
   useEffect(() => {
     if (user?.role !== 'admin') return;
@@ -323,7 +1266,11 @@ const EventDetails = ({ event, onBack, onEdit }: { event: ExpoEvent, onBack: () 
 
   useEffect(() => {
     setLoadingSeminars(true);
-    const q = query(collection(db, 'events', event.id, 'seminars'), orderBy('time', 'asc'));
+    const seminarsRef = collection(db, 'events', event.id, 'seminars');
+    const q = user?.role === 'admin' 
+      ? query(seminarsRef, orderBy('time', 'asc'))
+      : query(seminarsRef, where('status', '==', 'published'), orderBy('time', 'asc'));
+      
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const fetched = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Seminar));
       setSeminars(fetched);
@@ -399,31 +1346,11 @@ const EventDetails = ({ event, onBack, onEdit }: { event: ExpoEvent, onBack: () 
     setUpdatingRegStatus(true);
     try {
       await updateDoc(doc(db, path), { status: newStatus });
+      setEditingReg(null);
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, path);
     } finally {
       setUpdatingRegStatus(false);
-    }
-  };
-
-  const handleToggleSave = async () => {
-    if (!user) return alert('Please sign in to save events');
-    setTogglingSave(true);
-    try {
-      const userRef = doc(db, 'users', user.uid);
-      if (isSaved) {
-        await updateDoc(userRef, {
-          savedEvents: arrayRemove(event.id)
-        });
-      } else {
-        await updateDoc(userRef, {
-          savedEvents: arrayUnion(event.id)
-        });
-      }
-    } catch (error) {
-      handleFirestoreError(error, OperationType.UPDATE, 'user profile');
-    } finally {
-      setTogglingSave(false);
     }
   };
 
@@ -436,50 +1363,52 @@ const EventDetails = ({ event, onBack, onEdit }: { event: ExpoEvent, onBack: () 
   const shareLinks = getShareLinks(event);
 
   return (
-    <motion.div 
-      initial={{ opacity: 0, y: 10 }}
-      animate={{ opacity: 1, y: 0 }}
-      className="bg-white rounded-lg border border-[#E4E6EB] shadow-sm overflow-hidden flex flex-col h-full"
-    >
+    <>
       {/* Seminar Detail Modal */}
       <AnimatePresence>
         {selectedSeminarForModal && (
-          <div className="fixed inset-0 bg-black/60 backdrop-blur-md z-[110] flex items-center justify-center p-4">
+          <div className="fixed inset-0 bg-black/70 backdrop-blur-md z-[110] flex items-center justify-center p-4">
             <motion.div 
               initial={{ scale: 0.95, opacity: 0, y: 20 }}
               animate={{ scale: 1, opacity: 1, y: 0 }}
               exit={{ scale: 0.95, opacity: 0, y: 20 }}
-              className="bg-white rounded-3xl shadow-2xl overflow-hidden max-w-xl w-full"
+              className="bg-white rounded-3xl shadow-2xl overflow-hidden max-w-xl w-full border border-[#E4E6EB]"
             >
-              <div className="relative h-32 bg-gradient-to-br from-[#1976D2] to-[#D32F2F] p-8">
+              <div className="relative h-36 bg-gradient-to-br from-[#1976D2] via-[#1565C0] to-[#0D47A1] p-8">
                 <button 
                   onClick={() => setSelectedSeminarForModal(null)}
-                  className="absolute top-4 right-4 p-2 bg-white/20 hover:bg-white/40 rounded-full text-white transition-colors"
+                  className="absolute top-6 right-6 p-2 bg-white/10 hover:bg-white/20 rounded-full text-white transition-colors border border-white/10"
                 >
                   <X className="w-5 h-5" />
                 </button>
-                <div className="mt-4 inline-block px-3 py-1 bg-white/20 backdrop-blur-sm rounded-full text-[10px] font-bold text-white uppercase tracking-widest border border-white/20">
-                  {selectedSeminarForModal.category || 'Workshop'}
+                <div className="mt-4 flex flex-col gap-2">
+                  <div className="inline-block self-start px-3 py-1 bg-white/20 backdrop-blur-md rounded-full text-[10px] font-black text-white uppercase tracking-widest border border-white/20">
+                    {selectedSeminarForModal.category || 'Session'}
+                  </div>
+                  <h3 className="text-2xl font-black text-white tracking-tight leading-tight">
+                    {selectedSeminarForModal.title}
+                  </h3>
                 </div>
               </div>
 
-              <div className="p-8 -mt-8 bg-white rounded-t-3xl relative">
-                <div className="flex items-start justify-between gap-4 mb-6">
-                  <div>
-                    <h3 className="text-2xl font-black text-[#1C1E21] tracking-tight leading-tight mb-2">
-                      {selectedSeminarForModal.title}
-                    </h3>
-                    <div className="flex flex-wrap gap-4">
-                      <div className="flex items-center gap-2 text-[13px] text-[#606770]">
-                        <div className="w-8 h-8 rounded-full bg-[#F0F2F5] flex items-center justify-center font-bold text-[#1976D2]">
-                          {selectedSeminarForModal.speaker.charAt(0)}
-                        </div>
-                        <span className="font-bold">{selectedSeminarForModal.speaker}</span>
-                      </div>
-                      <div className="flex items-center gap-2 text-[13px] text-[#606770]">
-                        <Clock className="w-4 h-4 text-[#D32F2F]" />
-                        <span className="font-bold">{selectedSeminarForModal.time}</span>
-                      </div>
+              <div className="p-8 bg-white rounded-t-3xl -mt-6 relative">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-8">
+                  <div className="flex items-center gap-3 p-4 bg-[#F8F9FA] rounded-2xl border border-[#F0F2F5]">
+                    <div className="w-10 h-10 rounded-full bg-[#E3F2FD] flex items-center justify-center font-black text-[#1976D2]">
+                      {selectedSeminarForModal.speaker?.charAt(0) || 'S'}
+                    </div>
+                    <div>
+                      <span className="block text-[10px] font-bold uppercase text-[#606770] mb-0.5">Speaker</span>
+                      <span className="text-[14px] font-black text-[#1C1E21]">{selectedSeminarForModal.speaker || 'Guest Speaker'}</span>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-3 p-4 bg-[#F8F9FA] rounded-2xl border border-[#F0F2F5]">
+                    <div className="w-10 h-10 rounded-full bg-[#FFF3E0] flex items-center justify-center">
+                      <Clock className="w-5 h-5 text-[#E65100]" />
+                    </div>
+                    <div>
+                      <span className="block text-[10px] font-bold uppercase text-[#606770] mb-0.5">Time</span>
+                      <span className="text-[14px] font-black text-[#1C1E21]">{selectedSeminarForModal.time}</span>
                     </div>
                   </div>
                 </div>
@@ -487,14 +1416,14 @@ const EventDetails = ({ event, onBack, onEdit }: { event: ExpoEvent, onBack: () 
                 <div className="space-y-6">
                   <section>
                     <h4 className="text-[11px] font-bold uppercase text-[#606770] mb-3 flex items-center gap-2">
-                      <Info className="w-3 h-3" />
-                      About this Session
+                      <Info className="w-4 h-4 text-[#1976D2]" />
+                      Session Description
                     </h4>
-                    <div className="text-[15px] text-[#4B4F56] leading-relaxed bg-[#F8F9FA] p-5 rounded-2xl border border-[#F0F2F5]">
+                    <div className="text-[15px] text-[#4B4F56] leading-relaxed bg-[#F8F9FA] p-6 rounded-2xl border border-[#F0F2F5] min-h-[100px]">
                       {selectedSeminarForModal.description ? (
                         selectedSeminarForModal.description
                       ) : (
-                        <span className="italic opacity-60">Join us for a deep dive into {selectedSeminarForModal.title}. Details will be shared during the presentation.</span>
+                        <span className="italic opacity-60">Join us for an informative deep dive into {selectedSeminarForModal.title}. Our speakers will cover key insights and practical takeaways.</span>
                       )}
                     </div>
                   </section>
@@ -508,21 +1437,21 @@ const EventDetails = ({ event, onBack, onEdit }: { event: ExpoEvent, onBack: () 
                       </div>
                     </div>
                     <div className="p-4 bg-[#F0F2F5] rounded-xl border border-[#E4E6EB]">
-                      <span className="block text-[10px] font-bold uppercase text-[#606770] mb-1">Capacity</span>
+                      <span className="block text-[10px] font-bold uppercase text-[#606770] mb-1">Session Info</span>
                       <div className="flex items-center gap-2 text-[14px] font-black text-[#1C1E21]">
                         <Users className="w-4 h-4 text-[#1976D2]" />
-                        Open Seating
+                        Open to All
                       </div>
                     </div>
                   </div>
 
-                  <div className="pt-4 flex gap-3">
+                  <div className="pt-6 border-t border-[#F0F2F5] flex gap-3">
                     <button 
                       onClick={() => {
                         const links = getSeminarCalendarLinks(event, selectedSeminarForModal);
                         window.open(links.google, '_blank');
                       }}
-                      className="flex-grow py-4 bg-[#1976D2] text-white font-bold rounded-2xl hover:bg-black transition-all flex items-center justify-center gap-2 shadow-lg shadow-[#1976D2]/20"
+                      className="flex-grow py-4 bg-[#1976D2] text-white font-bold rounded-2xl hover:bg-black transition-all flex items-center justify-center gap-3 shadow-xl shadow-[#1976D2]/20"
                     >
                       <Calendar className="w-5 h-5" />
                       Add to Google Calendar
@@ -531,11 +1460,64 @@ const EventDetails = ({ event, onBack, onEdit }: { event: ExpoEvent, onBack: () 
                       onClick={() => setSelectedSeminarForModal(null)}
                       className="px-8 py-4 bg-[#F0F2F5] text-[#1C1E21] font-bold rounded-2xl hover:bg-[#E4E6EB] transition-colors"
                     >
-                      Close
+                      Dismiss
                     </button>
                   </div>
                 </div>
               </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      <motion.div 
+        initial={{ opacity: 0, y: 10 }}
+        animate={{ opacity: 1, y: 0 }}
+        className="bg-white rounded-lg border border-[#E4E6EB] shadow-sm overflow-hidden flex flex-col h-full"
+      >
+
+      {/* Admin Registration Status Modal */}
+      <AnimatePresence>
+        {user?.role === 'admin' && editingReg && (
+          <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[150] flex items-center justify-center p-4">
+            <motion.div 
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              className="bg-white rounded-2xl shadow-2xl p-8 max-w-sm w-full"
+            >
+              <h3 className="text-xl font-bold text-[#1C1E21] mb-2 tracking-tight">Update Registration</h3>
+              <p className="text-[13px] text-[#606770] mb-6 leading-tight">
+                Change status for <span className="font-bold text-[#1C1E21]">{editingReg.userName}</span>
+              </p>
+              
+              <div className="space-y-3 mb-8">
+                {['confirmed', 'pending', 'cancelled'].map(status => (
+                  <button
+                    key={status}
+                    onClick={() => handleUpdateRegStatus(editingReg.path, status)}
+                    disabled={updatingRegStatus}
+                    className={cn(
+                      "w-full py-3 px-4 rounded-xl border flex items-center justify-between font-bold text-[14px] transition-all",
+                      editingReg.status === status 
+                        ? (status === 'confirmed' ? "bg-[#2E7D32] text-white border-[#2E7D32]" : 
+                           status === 'pending' ? "bg-[#E65100] text-white border-[#E65100]" :
+                           "bg-[#D32F2F] text-white border-[#D32F2F]")
+                        : "bg-white text-[#1C1E21] border-[#E4E6EB] hover:border-[#1976D2]"
+                    )}
+                  >
+                    <span className="capitalize">{status}</span>
+                    {editingReg.status === status && <CheckCircle className="w-4 h-4 text-white" />}
+                  </button>
+                ))}
+              </div>
+
+              <button 
+                onClick={() => setEditingReg(null)}
+                className="w-full py-3 bg-[#F0F2F5] text-[#1C1E21] font-bold rounded-xl hover:bg-[#E4E6EB] transition-colors"
+              >
+                Close
+              </button>
             </motion.div>
           </div>
         )}
@@ -651,26 +1633,6 @@ const EventDetails = ({ event, onBack, onEdit }: { event: ExpoEvent, onBack: () 
               {registering ? 'Registering...' : 'Register for Expo'}
             </button>
           )}
-          <button 
-            onClick={handleToggleSave}
-            disabled={togglingSave}
-            className={cn(
-              "p-2.5 rounded-lg border transition-all flex items-center gap-2",
-              isSaved 
-                ? "bg-[#E3F2FD] border-[#1976D2] text-[#1976D2]" 
-                : "bg-white border-[#E4E6EB] text-[#606770] hover:border-[#1976D2] hover:text-[#1976D2]"
-            )}
-            title={isSaved ? "Remove from Saved" : "Save for Later"}
-          >
-            {togglingSave ? (
-              <Loader2 className="w-5 h-5 animate-spin" />
-            ) : (
-              <Bookmark className={cn("w-5 h-5", isSaved && "fill-current")} />
-            )}
-            <span className="text-[12px] font-bold uppercase tracking-tight hidden md:inline">
-              {isSaved ? "Saved" : "Save"}
-            </span>
-          </button>
           <div className="bg-[#F0F2F5] px-4 py-2 rounded-lg text-center border border-[#E4E6EB]">
             <span className="block text-[10px] font-bold text-[#606770] uppercase">Tickets</span>
             <span className="text-[#1C1E21] font-bold text-lg">Active</span>
@@ -718,9 +1680,42 @@ const EventDetails = ({ event, onBack, onEdit }: { event: ExpoEvent, onBack: () 
       {/* Content Grid */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 p-6">
         <div className="lg:col-span-2 space-y-6">
+          {!loadingUpdates && updates.length > 0 && (
+            <section className="space-y-3">
+              {updates.map(update => (
+                <div 
+                  key={update.id} 
+                  className={clsx(
+                    "p-4 rounded-xl border flex items-start gap-4",
+                    update.type === 'alert' ? "bg-[#FFEBEE] border-[#FFCDD2] text-[#B71C1C]" :
+                    update.type === 'warning' ? "bg-[#FFF8E1] border-[#FFECB3] text-[#F57F17]" :
+                    "bg-[#E3F2FD] border-[#BBDEFB] text-[#0D47A1]"
+                  )}
+                >
+                  <div className="shrink-0 mt-0.5">
+                    {update.type === 'alert' && <AlertCircle className="w-5 h-5 flex-shrink-0" />}
+                    {update.type === 'warning' && <AlertTriangle className="w-5 h-5 flex-shrink-0" />}
+                    {update.type === 'info' && <Info className="w-5 h-5 flex-shrink-0" />}
+                  </div>
+                  <div className="flex-grow">
+                     <p className="text-[14px] font-bold sm:text-[15px]">{update.message}</p>
+                     <p className="text-[10px] font-bold uppercase mt-1 opacity-70">
+                       {format(new Date(update.createdAt), 'h:mm a')}
+                     </p>
+                  </div>
+                </div>
+              ))}
+            </section>
+          )}
+
           <section>
             <h3 className="text-[11px] font-bold uppercase text-[#606770] mb-3 border-b border-[#F0F2F5] pb-2">About the Event</h3>
             <p className="text-[14px] leading-relaxed text-[#1C1E21]">{event.description}</p>
+          </section>
+
+          {/* Sponsor Highlights */}
+          <section className="bg-[#F8F9FA] rounded-3xl p-8 border border-[#E4E6EB]">
+            <SponsorSection sponsors={sponsors} loading={loadingSponsors} />
           </section>
 
           <section>
@@ -920,24 +1915,53 @@ const EventDetails = ({ event, onBack, onEdit }: { event: ExpoEvent, onBack: () 
                               <div className="text-[10px] text-[#606770] truncate max-w-[150px]">{reg.userEmail}</div>
                             </td>
                             <td className="px-4 py-3">
-                              <select
-                                value={reg.status || 'confirmed'}
-                                disabled={updatingRegStatus}
-                                onChange={(e) => handleUpdateRegStatus(reg.path, e.target.value)}
-                                className={cn(
-                                  "px-1.5 py-0.5 rounded font-bold text-[9px] uppercase border-none outline-none cursor-pointer bg-transparent transition-all",
-                                  reg.status === 'confirmed' ? "bg-[#E8F5E9] text-[#2E7D32]" : 
-                                  reg.status === 'pending' ? "bg-[#FFF3E0] text-[#E65100]" :
-                                  "bg-[#FFF5F5] text-[#D32F2F]"
-                                )}
-                              >
-                                <option value="confirmed">Confirmed</option>
-                                <option value="pending">Pending</option>
-                                <option value="cancelled">Cancelled</option>
-                              </select>
+                              <div className="relative inline-block w-full max-w-[120px]">
+                                <select 
+                                  value={reg.status || 'confirmed'} 
+                                  onChange={(e) => handleUpdateRegStatus(reg.path, e.target.value)}
+                                  disabled={updatingRegStatus}
+                                  className={cn(
+                                    "w-full pl-2 pr-6 py-1.5 rounded font-bold text-[9px] uppercase outline-none cursor-pointer appearance-none transition-all border shadow-sm",
+                                    reg.status === 'confirmed' ? "bg-[#E8F5E9] text-[#2E7D32] border-[#2E7D32]/30" : 
+                                    reg.status === 'pending' ? "bg-[#FFF3E0] text-[#E65100] border-[#E65100]/30" :
+                                    "bg-[#FFF5F5] text-[#D32F2F] border-[#D32F2F]/30"
+                                  )}
+                                >
+                                  <option value="confirmed">Confirmed</option>
+                                  <option value="pending">Pending</option>
+                                  <option value="cancelled">Cancelled</option>
+                                </select>
+                                <div className="absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none opacity-40">
+                                  <ChevronRight className="w-2.5 h-2.5 rotate-90" />
+                                </div>
+                              </div>
                             </td>
                             <td className="px-4 py-3 text-right">
-                              <span className="text-[10px] text-[#606770] italic">Direct Edit</span>
+                              <div className="flex justify-end gap-1">
+                                <button 
+                                  onClick={() => setEditingReg(reg)}
+                                  className="p-1.5 text-[#1976D2] hover:bg-[#E3F2FD] rounded-lg transition-all"
+                                  title="View Details"
+                                >
+                                  <Edit2 className="w-3.5 h-3.5" />
+                                </button>
+                                <button 
+                                  onClick={async () => {
+                                    if (confirm(`Are you sure you want to delete the registration for ${reg.userName}?`)) {
+                                      try {
+                                        await deleteDoc(doc(db, reg.path));
+                                        alert('Registration deleted.');
+                                      } catch (err) {
+                                        handleFirestoreError(err, OperationType.DELETE, reg.path);
+                                      }
+                                    }
+                                  }}
+                                  className="p-1.5 text-[#606770] hover:text-[#D32F2F] hover:bg-[#FFF5F5] rounded-lg transition-all"
+                                  title="Delete Registration"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              </div>
                             </td>
                           </tr>
                         ))}
@@ -953,15 +1977,8 @@ const EventDetails = ({ event, onBack, onEdit }: { event: ExpoEvent, onBack: () 
         <div className="space-y-6">
           <div className="bg-[#F8F9FA] border border-[#E4E6EB] rounded-lg p-5">
             <h3 className="text-[11px] font-bold uppercase text-[#606770] mb-4">Venue Details</h3>
-            <div className="aspect-square bg-white border border-[#E4E6EB] rounded flex items-center justify-center mb-4 text-[#606770] text-[12px] text-center p-4">
-              {event.mapUrl ? (
-                <img src={event.mapUrl} alt="Hall Map" className="max-w-full max-h-full object-contain" referrerPolicy="no-referrer" />
-              ) : (
-                <div className="flex flex-col items-center">
-                  <MapIcon className="w-8 h-8 mb-2 opacity-20" />
-                  Floor plan placeholder for {event.city}
-                </div>
-              )}
+            <div className="aspect-square bg-white border border-[#E4E6EB] rounded overflow-hidden mb-4 relative h-[320px]">
+              <VenueInteractiveMap event={event} sponsors={sponsors} />
             </div>
             {event.mapUrl ? (
               <a 
@@ -1100,17 +2117,34 @@ const EventDetails = ({ event, onBack, onEdit }: { event: ExpoEvent, onBack: () 
         </div>
       </div>
     </motion.div>
+    </>
   );
 };
 
 const ProfileSettings = ({ user, onUpdate }: { user: AppUser, onUpdate: (data: Partial<AppUser>) => Promise<void> }) => {
   const [displayName, setDisplayName] = useState(user.displayName);
+  const [photoURL, setPhotoURL] = useState(user.photoURL || '');
   const [school, setSchool] = useState(user.school || '');
-  const [major, setMajor] = useState(user.major || '');
   const [graduationYear, setGraduationYear] = useState(user.graduationYear || '');
+  const [major, setMajor] = useState(user.major || '');
+  const [linkedin, setLinkedin] = useState(user.linkedin || '');
+  const [phone, setPhone] = useState(user.phone || '');
+  const [resumeUrl, setResumeUrl] = useState(user.resumeUrl || '');
+  const [workAuthorization, setWorkAuthorization] = useState(user.workAuthorization || 'authorized');
+  const [preferredContact, setPreferredContact] = useState(user.preferredContact || 'email');
   const [interestInput, setInterestInput] = useState('');
   const [interests, setInterests] = useState<string[]>(user.interests || []);
   const [saving, setSaving] = useState(false);
+  const [uploadingResume, setUploadingResume] = useState(false);
+  const [resumeProgress, setResumeProgress] = useState(0);
+
+  const handleUpdateAuthProfile = async () => {
+    try {
+      await updateProfile(auth.currentUser!, { displayName, photoURL });
+    } catch (e) {
+      console.error("Auth profile update failed", e);
+    }
+  };
 
   const handleAddInterest = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && interestInput.trim()) {
@@ -1126,14 +2160,60 @@ const ProfileSettings = ({ user, onUpdate }: { user: AppUser, onUpdate: (data: P
     setInterests(interests.filter(i => i !== tag));
   };
 
+  const handleResumeUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (file.size > 5 * 1024 * 1024) { // 5MB limit
+      alert("File is too large. Please upload a PDF under 5MB.");
+      return;
+    }
+
+    setUploadingResume(true);
+    setResumeProgress(0);
+
+    try {
+      const storageRef = ref(storage, `resumes/${user.uid}_${Date.now()}_${file.name}`);
+      const uploadTask = uploadBytesResumable(storageRef, file);
+
+      uploadTask.on(
+        'state_changed',
+        (snapshot) => {
+          const progress = (snapshot.bytesTransferred / snapshot.totalBytes) * 100;
+          setResumeProgress(progress);
+        },
+        (error) => {
+          console.error("Upload failed", error);
+          setUploadingResume(false);
+          alert("Resume upload failed. Please try again.");
+        },
+        async () => {
+          const downloadURL = await getDownloadURL(uploadTask.snapshot.ref);
+          setResumeUrl(downloadURL);
+          setUploadingResume(false);
+        }
+      );
+    } catch (error) {
+      console.error("Upload error", error);
+      setUploadingResume(false);
+    }
+  };
+
   const handleSave = async () => {
     setSaving(true);
+    await handleUpdateAuthProfile();
     await onUpdate({ 
       displayName, 
+      photoURL,
       school, 
-      major: user.role === 'student' ? major : undefined,
-      graduationYear: user.role === 'student' ? graduationYear : undefined,
-      interests 
+      graduationYear, 
+      major, 
+      interests, 
+      linkedin, 
+      phone, 
+      resumeUrl, 
+      workAuthorization, 
+      preferredContact 
     });
     setSaving(false);
     alert('Profile updated successfully!');
@@ -1145,51 +2225,182 @@ const ProfileSettings = ({ user, onUpdate }: { user: AppUser, onUpdate: (data: P
       animate={{ opacity: 1, y: 0 }}
       className="max-w-2xl mx-auto w-full space-y-6"
     >
-      <div className="bg-white rounded-lg border border-[#E4E6EB] shadow-sm p-6">
-        <div className="flex items-center gap-3 mb-6">
+      <div className="bg-white rounded-lg border border-[#E4E6EB] shadow-sm p-6 text-[14px]">
+        <div className="flex items-center gap-3 mb-8">
           <div className="w-10 h-10 bg-[#F8F9FA] rounded-xl flex items-center justify-center p-1.5 border border-[#E4E6EB]">
             <img src={LOGO_URL} alt="NCRF" className="w-full h-full object-contain" referrerPolicy="no-referrer" />
           </div>
-          <h2 className="text-2xl font-black text-[#1C1E21] tracking-tight uppercase">User Profile Settings</h2>
+          <h2 className="text-xl font-bold text-[#1C1E21] tracking-tight">MY PROFILE SETTINGS</h2>
         </div>
         
-        <div className="space-y-4">
-          <div>
-            <label className="block text-[11px] font-bold uppercase text-[#606770] mb-1.5">Display Name</label>
-            <input 
-              type="text" 
-              value={displayName}
-              onChange={(e) => setDisplayName(e.target.value)}
-              className="w-full bg-[#F0F2F5] border border-[#E4E6EB] rounded px-4 py-2 text-[14px] outline-none focus:border-[#1976D2]"
-              placeholder="Your full name"
-            />
-          </div>
-
-          <div>
-            <label className="block text-[11px] font-bold uppercase text-[#606770] mb-1.5">{user.role === 'student' ? 'Current School' : 'Affiliation'}</label>
-            <input 
-              type="text" 
-              value={school}
-              onChange={(e) => setSchool(e.target.value)}
-              className="w-full bg-[#F0F2F5] border border-[#E4E6EB] rounded px-4 py-2 text-[14px] outline-none focus:border-[#1976D2]"
-              placeholder={user.role === 'student' ? "High School or College Name" : "Organization Name"}
-            />
-          </div>
-
-          {user.role === 'student' && (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div className="space-y-6">
+          <div className="flex flex-col md:flex-row gap-6 items-center md:items-start border-b border-[#F0F2F5] pb-8">
+            <div className="flex-shrink-0">
+              <div className="w-24 h-24 rounded-2xl bg-[#F8F9FA] border border-[#E4E6EB] overflow-hidden flex items-center justify-center relative">
+                {photoURL ? (
+                  <img src={photoURL} alt="Profile" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                ) : (
+                  <UserIcon className="w-8 h-8 text-[#606770] opacity-20" />
+                )}
+              </div>
+            </div>
+            <div className="flex-grow space-y-4 w-full">
               <div>
-                <label className="block text-[11px] font-bold uppercase text-[#606770] mb-1.5">Intended Major</label>
-                <input 
-                  type="text" 
-                  value={major}
-                  onChange={(e) => setMajor(e.target.value)}
-                  className="w-full bg-[#F0F2F5] border border-[#E4E6EB] rounded px-4 py-2 text-[14px] outline-none focus:border-[#1976D2]"
-                  placeholder="e.g. Computer Science"
-                />
+                <label className="block text-[11px] font-bold uppercase text-[#606770] mb-1.5">Profile Photo URL</label>
+                <div className="flex gap-2">
+                  <input 
+                    type="text" 
+                    value={photoURL}
+                    onChange={(e) => setPhotoURL(e.target.value)}
+                    className="flex-grow bg-[#F0F2F5] border border-transparent rounded px-4 py-2 outline-none focus:bg-white focus:border-[#1976D2] transition-all"
+                    placeholder="https://..."
+                  />
+                  <div className="bg-[#F0F2F5] p-2 rounded flex items-center justify-center">
+                    <Camera className="w-4 h-4 text-[#606770]" />
+                  </div>
+                </div>
+                <p className="text-[10px] text-[#A0A0A0] mt-1 italic">Public URL to your image (.jpg, .png)</p>
               </div>
               <div>
-                <label className="block text-[11px] font-bold uppercase text-[#606770] mb-1.5">Expected Graduation Year</label>
+                <label className="block text-[11px] font-bold uppercase text-[#606770] mb-1.5">Full Display Name</label>
+                <input 
+                  type="text" 
+                  value={displayName}
+                  onChange={(e) => setDisplayName(e.target.value)}
+                  className="w-full bg-[#F0F2F5] border border-transparent rounded px-4 py-2 outline-none focus:bg-white focus:border-[#1976D2] transition-all"
+                />
+              </div>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-[11px] font-bold uppercase text-[#606770] mb-1.5">{user.role === 'student' ? 'School Name' : 'Organization'}</label>
+              <input 
+                type="text" 
+                value={school}
+                onChange={(e) => setSchool(e.target.value)}
+                className="w-full bg-[#F0F2F5] border border-transparent rounded px-4 py-2 outline-none focus:bg-white focus:border-[#1976D2] transition-all"
+                placeholder={user.role === 'student' ? "e.g. University of..." : "e.g. NCRF Foundation"}
+              />
+            </div>
+            {(user.role === 'student' || user.role === 'parent' || user.role === 'admin' || user.role === 'recruiter') && (
+              <>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-[11px] font-bold uppercase text-[#606770] mb-1.5">LinkedIn Profile URL</label>
+                    <input 
+                      type="text" 
+                      value={linkedin}
+                      onChange={(e) => setLinkedin(e.target.value)}
+                      className="w-full bg-[#F0F2F5] border border-[#E4E6EB] rounded px-4 py-2 text-[14px] outline-none focus:border-[#1976D2]"
+                      placeholder="https://linkedin.com/in/username"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-bold uppercase text-[#606770] mb-1.5">Phone Number</label>
+                    <input 
+                      type="text" 
+                      value={phone}
+                      onChange={(e) => setPhone(e.target.value)}
+                      className="w-full bg-[#F0F2F5] border border-[#E4E6EB] rounded px-4 py-2 text-[14px] outline-none focus:border-[#1976D2]"
+                      placeholder="+1 (555) 000-0000"
+                    />
+                  </div>
+                </div>
+
+                {user.role === 'student' && (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-[11px] font-bold uppercase text-[#606770] mb-1.5">Academic Major</label>
+                      <input 
+                        type="text" 
+                        value={major}
+                        onChange={(e) => setMajor(e.target.value)}
+                        className="w-full bg-[#F0F2F5] border border-[#E4E6EB] rounded px-4 py-2 text-[14px] outline-none focus:border-[#1976D2]"
+                        placeholder="e.g. Computer Science"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] font-bold uppercase text-[#606770] mb-1.5">Graduation Year</label>
+                      <input 
+                        type="text" 
+                        value={graduationYear}
+                        onChange={(e) => setGraduationYear(e.target.value)}
+                        className="w-full bg-[#F0F2F5] border border-[#E4E6EB] rounded px-4 py-2 text-[14px] outline-none focus:border-[#1976D2]"
+                        placeholder="e.g. 2026"
+                      />
+                    </div>
+                  </div>
+                )}
+
+                {user.role === 'student' && (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-[11px] font-bold uppercase text-[#606770] mb-1.5">Work Authorization</label>
+                      <select 
+                        value={workAuthorization}
+                        onChange={(e) => setWorkAuthorization(e.target.value as any)}
+                        className="w-full bg-[#F0F2F5] border border-[#E4E6EB] rounded px-4 py-2 text-[14px] outline-none focus:border-[#1976D2]"
+                      >
+                        <option value="authorized">Legally Authorized to Work</option>
+                        <option value="requires-sponsorship">Requires Visa Sponsorship</option>
+                        <option value="not-authorized">Not Currently Authorized</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-[11px] font-bold uppercase text-[#606770] mb-1.5">Preferred Contact</label>
+                      <select 
+                        value={preferredContact}
+                        onChange={(e) => setPreferredContact(e.target.value as any)}
+                        className="w-full bg-[#F0F2F5] border border-[#E4E6EB] rounded px-4 py-2 text-[14px] outline-none focus:border-[#1976D2]"
+                      >
+                        <option value="email">Email</option>
+                        <option value="phone">Phone</option>
+                        <option value="linkedin">LinkedIn</option>
+                      </select>
+                    </div>
+                  </div>
+                )}
+
+                {user.role === 'student' && (
+                  <div>
+                    <label className="block text-[11px] font-bold uppercase text-[#606770] mb-1.5">Scannable Resume (PDF)</label>
+                    <div className="flex flex-col md:flex-row gap-2">
+                      <input 
+                        type="text" 
+                        value={resumeUrl}
+                        onChange={(e) => setResumeUrl(e.target.value)}
+                        className="flex-grow bg-[#F0F2F5] border border-[#E4E6EB] rounded px-4 py-2 text-[14px] outline-none focus:border-[#1976D2]"
+                        placeholder="Link to PDF (Google Drive, Dropbox, etc.) or Upload ->"
+                      />
+                      <label className="bg-[#E3F2FD] text-[#1976D2] border border-[#BBDEFB] rounded px-4 py-2 flex items-center justify-center gap-2 cursor-pointer font-semibold text-[13px] hover:bg-[#BBDEFB] transition-colors shrink-0">
+                        <Upload className="w-4 h-4" />
+                        {uploadingResume ? `Uploading ${Math.round(resumeProgress)}%` : 'Upload PDF'}
+                        <input 
+                          type="file" 
+                          accept="application/pdf"
+                          className="hidden" 
+                          onChange={handleResumeUpload}
+                          disabled={uploadingResume}
+                        />
+                      </label>
+                    </div>
+                    {resumeUrl && (
+                      <div className="mt-2 text-[12px] flex items-center gap-2">
+                        <span className="text-[#606770]">Current Resume:</span>
+                        <a href={resumeUrl} target="_blank" rel="noopener noreferrer" className="text-[#1976D2] hover:underline font-medium select-all truncate max-w-[200px] md:max-w-md inline-block align-bottom">{resumeUrl}</a>
+                      </div>
+                    )}
+                    <p className="text-[10px] text-[#606770] mt-1 italic">Link a public PDF of your resume, or upload a new one for recruiters to view.</p>
+                  </div>
+                )}
+              </>
+            )}
+            
+            {user.role === 'parent' && (
+              <div>
+                <label className="block text-[11px] font-bold uppercase text-[#606770] mb-1.5">Child's Graduation Year</label>
                 <input 
                   type="text" 
                   value={graduationYear}
@@ -1198,8 +2409,8 @@ const ProfileSettings = ({ user, onUpdate }: { user: AppUser, onUpdate: (data: P
                   placeholder="e.g. 2026"
                 />
               </div>
-            </div>
-          )}
+            )}
+          </div>
 
           <div>
             <label className="block text-[11px] font-bold uppercase text-[#606770] mb-1.5">Areas of Interest</label>
@@ -1245,7 +2456,7 @@ const ProfileSettings = ({ user, onUpdate }: { user: AppUser, onUpdate: (data: P
 };
 
 // --- Constants ---
-const LOGO_URL = "https://www.thecollegeexpo.org/wp-content/uploads/2022/10/NCRF-Logo.png";
+const LOGO_URL = "https://cdn.prod.website-files.com/597b2b2bb81a770001f1a5f7/645023e6c2a90181c3caadc0_6321388b64813e55c72d8a15_NCRF_Corp_Sheild_Address_Horiz-p-500.png";
 
 const AdminEventManager = ({ events, initialEditEvent }: { events: ExpoEvent[], initialEditEvent?: ExpoEvent | null }) => {
   const { user } = useContext(UserContext);
@@ -1256,6 +2467,8 @@ const AdminEventManager = ({ events, initialEditEvent }: { events: ExpoEvent[], 
   const [location, setLocation] = useState('');
   const [description, setDescription] = useState('');
   const [mapUrl, setMapUrl] = useState('');
+  const [floorPlanUrl, setFloorPlanUrl] = useState('');
+  const [timezone, setTimezone] = useState('');
   const [editingEventId, setEditingEventId] = useState<string | null>(null);
   
   // Seminar Form State
@@ -1271,6 +2484,28 @@ const AdminEventManager = ({ events, initialEditEvent }: { events: ExpoEvent[], 
   const [deletingSeminarId, setDeletingSeminarId] = useState<string | null>(null);
   const [loadingSeminars, setLoadingSeminars] = useState(false);
   
+  // Sponsor Form State
+  const [sponName, setSponName] = useState('');
+  const [sponLogo, setSponLogo] = useState('');
+  const [sponTier, setSponTier] = useState<Sponsor['tier']>('silver');
+  const [sponUrl, setSponUrl] = useState('');
+  const [sponDesc, setSponDesc] = useState('');
+  const [sponBoothId, setSponBoothId] = useState<number | ''>('');
+  const [editingSponsorId, setEditingSponsorId] = useState<string | null>(null);
+  const [sponsorsForSelectedEvent, setSponsorsForSelectedEvent] = useState<Sponsor[]>([]);
+  const [loadingSponsors, setLoadingSponsors] = useState(false);
+  const [deletingSponsorId, setDeletingSponsorId] = useState<string | null>(null);
+  const [sponsorErrors, setSponsorErrors] = useState<Record<string, string>>({});
+
+  // Updates / Announcements State
+  const [updateMsg, setUpdateMsg] = useState('');
+  const [updateType, setUpdateType] = useState<EventUpdate['type']>('info');
+  const [targetAudience, setTargetAudience] = useState<EventUpdate['targetAudience']>('all');
+  const [updatesForSelectedEvent, setUpdatesForSelectedEvent] = useState<EventUpdate[]>([]);
+  const [loadingUpdates, setLoadingUpdates] = useState(false);
+  const [deletingUpdateId, setDeletingUpdateId] = useState<string | null>(null);
+  const [updateErrors, setUpdateErrors] = useState<Record<string, string>>({});
+
   // Registration List State
   const [targetEventForReport, setTargetEventForReport] = useState('');
   const [registrants, setRegistrants] = useState<any[]>([]);
@@ -1278,7 +2513,11 @@ const AdminEventManager = ({ events, initialEditEvent }: { events: ExpoEvent[], 
   const [statusFilter, setStatusFilter] = useState('all');
   const [saving, setSaving] = useState(false);
   const [deletingEventId, setDeletingEventId] = useState<string | null>(null);
+  const [editingReg, setEditingReg] = useState<any | null>(null);
   const [deletingReg, setDeletingReg] = useState<any | null>(null);
+  const [eventErrors, setEventErrors] = useState<Record<string, string>>({});
+  const [seminarErrors, setSeminarErrors] = useState<Record<string, string>>({});
+  const [selectedSeminarIds, setSelectedSeminarIds] = useState<string[]>([]);
 
   useEffect(() => {
     if (initialEditEvent) {
@@ -1345,6 +2584,40 @@ const AdminEventManager = ({ events, initialEditEvent }: { events: ExpoEvent[], 
     return () => unsubscribe();
   }, [selectedEventId]);
 
+  useEffect(() => {
+    if (!selectedEventId) {
+      setSponsorsForSelectedEvent([]);
+      setUpdatesForSelectedEvent([]);
+      return;
+    }
+    setLoadingSponsors(true);
+    const qSponsors = query(collection(db, 'events', selectedEventId, 'sponsors'), orderBy('tier', 'asc'));
+    const unsubscribeSponsors = onSnapshot(qSponsors, (snapshot) => {
+      const fetched = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Sponsor));
+      setSponsorsForSelectedEvent(fetched);
+      setLoadingSponsors(false);
+    }, (err) => {
+      console.error(err);
+      setLoadingSponsors(false);
+    });
+
+    setLoadingUpdates(true);
+    const qUpdates = query(collection(db, 'events', selectedEventId, 'updates'), orderBy('createdAt', 'desc'));
+    const unsubscribeUpdates = onSnapshot(qUpdates, (snapshot) => {
+      const fetched = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as EventUpdate));
+      setUpdatesForSelectedEvent(fetched);
+      setLoadingUpdates(false);
+    }, (err) => {
+      console.error(err);
+      setLoadingUpdates(false);
+    });
+
+    return () => {
+      unsubscribeSponsors();
+      unsubscribeUpdates();
+    };
+  }, [selectedEventId]);
+
   const handleExportCSV = () => {
     if (registrants.length === 0) return alert('No data to export');
 
@@ -1379,13 +2652,24 @@ const AdminEventManager = ({ events, initialEditEvent }: { events: ExpoEvent[], 
     setLocation(event.location);
     setDescription(event.description);
     setMapUrl(event.mapUrl || '');
+    setFloorPlanUrl(event.floorPlanUrl || '');
+    setTimezone(event.timezone || '');
     // Scroll to form
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
   const handleCancelEdit = () => {
     setEditingEventId(null);
-    setName(''); setDate(''); setCity(''); setLocation(''); setDescription(''); setMapUrl('');
+    setName(''); setDate(''); setCity(''); setLocation(''); setDescription(''); setMapUrl(''); setFloorPlanUrl(''); setTimezone('');
+  };
+
+  const handleToggleEventStatus = async (event: ExpoEvent) => {
+    try {
+      const newStatus = event.status === 'published' ? 'draft' : 'published';
+      await updateDoc(doc(db, 'events', event.id), { status: newStatus });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, 'events');
+    }
   };
 
   const handleDeleteEvent = async (id: string) => {
@@ -1400,8 +2684,21 @@ const AdminEventManager = ({ events, initialEditEvent }: { events: ExpoEvent[], 
 
   const handleCreateEvent = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!name || !date || !city || !location || !description) return alert('Please fill all fields');
     
+    // Validation
+    const errors: Record<string, string> = {};
+    if (!name) errors.name = 'Event name is required';
+    if (!date) errors.date = 'Date is required';
+    if (!city) errors.city = 'City is required';
+    if (!location) errors.location = 'Venue location is required';
+    if (!description) errors.description = 'Event description is required';
+    
+    if (Object.keys(errors).length > 0) {
+      setEventErrors(errors);
+      return;
+    }
+    
+    setEventErrors({});
     setSaving(true);
     try {
       const eventData = {
@@ -1411,20 +2708,62 @@ const AdminEventManager = ({ events, initialEditEvent }: { events: ExpoEvent[], 
         location,
         description,
         time: '9am - 4pm', // Default
+        timezone,
         mapUrl,
+        floorPlanUrl,
+        status: 'published' as const,
         createdAt: new Date().toISOString()
       };
 
       if (editingEventId) {
         await updateDoc(doc(db, 'events', editingEventId), eventData);
-        alert('Event updated successfully!');
+        alert('Event launched successfully!');
         setEditingEventId(null);
       } else {
         await addDoc(collection(db, 'events'), eventData);
-        alert('Event created successfully!');
+        alert('Event launched successfully!');
       }
 
-      setName(''); setDate(''); setCity(''); setLocation(''); setDescription(''); setMapUrl('');
+      setName(''); setDate(''); setCity(''); setLocation(''); setDescription(''); setMapUrl(''); setFloorPlanUrl(''); setTimezone('');
+    } catch (error) {
+      handleFirestoreError(error, editingEventId ? OperationType.UPDATE : OperationType.CREATE, 'events');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleSaveDraftEvent = async () => {
+    if (!name) {
+      setEventErrors({ name: 'Event name is required even for drafts' });
+      return;
+    }
+    
+    setEventErrors({});
+    setSaving(true);
+    try {
+      const eventData = {
+        name,
+        date: date || new Date().toISOString().split('T')[0],
+        city: city || 'TBD',
+        location: location || 'TBD',
+        description: description || '',
+        time: '9am - 4pm',
+        timezone,
+        mapUrl,
+        floorPlanUrl,
+        status: 'draft' as const,
+        createdAt: new Date().toISOString()
+      };
+
+      if (editingEventId) {
+        await updateDoc(doc(db, 'events', editingEventId), eventData);
+        setEditingEventId(null);
+      } else {
+        await addDoc(collection(db, 'events'), eventData);
+      }
+      
+      alert('Draft saved successfully!');
+      setName(''); setDate(''); setCity(''); setLocation(''); setDescription(''); setMapUrl(''); setFloorPlanUrl(''); setTimezone('');
     } catch (error) {
       handleFirestoreError(error, editingEventId ? OperationType.UPDATE : OperationType.CREATE, 'events');
     } finally {
@@ -1434,8 +2773,22 @@ const AdminEventManager = ({ events, initialEditEvent }: { events: ExpoEvent[], 
 
   const handleCreateSeminar = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedEventId || !sTitle || !sSpeaker || !sTime || !sRoom || !sCategory) return alert('Please fill all seminar fields');
+    
+    // Validation
+    const errors: Record<string, string> = {};
+    if (!selectedEventId) errors.selectedEventId = 'Please select an event';
+    if (!sTitle) errors.sTitle = 'Seminar title is required';
+    if (!sSpeaker) errors.sSpeaker = 'Speaker is required';
+    if (!sTime) errors.sTime = 'Start time is required';
+    if (!sRoom) errors.sRoom = 'Room/Location is required';
+    if (!sCategory) errors.sCategory = 'Please select a category';
 
+    if (Object.keys(errors).length > 0) {
+      setSeminarErrors(errors);
+      return;
+    }
+
+    setSeminarErrors({});
     setSaving(true);
     try {
       const seminarData = {
@@ -1445,18 +2798,58 @@ const AdminEventManager = ({ events, initialEditEvent }: { events: ExpoEvent[], 
         room: sRoom,
         category: sCategory,
         description: sDescription,
+        status: 'published' as const,
         createdAt: new Date().toISOString()
       };
 
       if (editingSeminarId) {
         await updateDoc(doc(db, 'events', selectedEventId, 'seminars', editingSeminarId), seminarData);
-        alert('Seminar updated successfully!');
+        alert('Seminar published successfully!');
         setEditingSeminarId(null);
       } else {
         await addDoc(collection(db, 'events', selectedEventId, 'seminars'), seminarData);
-        alert('Seminar added successfully!');
+        alert('Seminar published successfully!');
       }
 
+      setSTitle(''); setSSpeaker(''); setSTime(''); setSRoom(''); setSCategory(''); setSDescription('');
+    } catch (error) {
+      handleFirestoreError(error, editingSeminarId ? OperationType.UPDATE : OperationType.CREATE, 'seminars');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleSaveDraftSeminar = async () => {
+    if (!selectedEventId || !sTitle) {
+      setSeminarErrors({ 
+        selectedEventId: !selectedEventId ? 'Please select an event' : '',
+        sTitle: !sTitle ? 'Seminar title is required' : '' 
+      });
+      return;
+    }
+
+    setSeminarErrors({});
+    setSaving(true);
+    try {
+      const seminarData = {
+        title: sTitle,
+        speaker: sSpeaker || 'TBD',
+        time: sTime || 'TBD',
+        room: sRoom || 'TBD',
+        category: sCategory || 'General',
+        description: sDescription || '',
+        status: 'draft' as const,
+        createdAt: new Date().toISOString()
+      };
+
+      if (editingSeminarId) {
+        await updateDoc(doc(db, 'events', selectedEventId, 'seminars', editingSeminarId), seminarData);
+        setEditingSeminarId(null);
+      } else {
+        await addDoc(collection(db, 'events', selectedEventId, 'seminars'), seminarData);
+      }
+
+      alert('Seminar draft saved!');
       setSTitle(''); setSSpeaker(''); setSTime(''); setSRoom(''); setSCategory(''); setSDescription('');
     } catch (error) {
       handleFirestoreError(error, editingSeminarId ? OperationType.UPDATE : OperationType.CREATE, 'seminars');
@@ -1487,9 +2880,157 @@ const AdminEventManager = ({ events, initialEditEvent }: { events: ExpoEvent[], 
     try {
       await deleteDoc(doc(db, 'events', selectedEventId, 'seminars', seminarId));
       setDeletingSeminarId(null);
+      setSelectedSeminarIds(prev => prev.filter(id => id !== seminarId));
       alert('Seminar deleted successfully!');
     } catch (error) {
       handleFirestoreError(error, OperationType.DELETE, 'seminars');
+    }
+  };
+
+  const handleSaveSponsor = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedEventId) return;
+
+    const errors: Record<string, string> = {};
+    if (!sponName) errors.sponName = 'Sponsor name is required';
+    if (!sponLogo) errors.sponLogo = 'Logo URL is required';
+    
+    if (Object.keys(errors).length > 0) {
+      setSponsorErrors(errors);
+      return;
+    }
+
+    setSponsorErrors({});
+    setSaving(true);
+    try {
+      const sponsorData: Partial<Sponsor> = {
+        eventId: selectedEventId,
+        name: sponName,
+        logoUrl: sponLogo,
+        tier: sponTier,
+        websiteUrl: sponUrl,
+        description: sponDesc,
+        createdAt: new Date().toISOString()
+      };
+      if (sponBoothId !== '') {
+        sponsorData.boothId = Number(sponBoothId);
+      } else if (editingSponsorId) {
+        (sponsorData as any).boothId = deleteField();
+      }
+
+      if (editingSponsorId) {
+        await updateDoc(doc(db, 'events', selectedEventId, 'sponsors', editingSponsorId), sponsorData);
+        setEditingSponsorId(null);
+      } else {
+        await addDoc(collection(db, 'events', selectedEventId, 'sponsors'), sponsorData);
+      }
+
+      setSponName(''); setSponLogo(''); setSponTier('silver'); setSponUrl(''); setSponDesc(''); setSponBoothId('');
+      alert('Sponsor highlights updated!');
+    } catch (error) {
+      handleFirestoreError(error, editingSponsorId ? OperationType.UPDATE : OperationType.CREATE, 'sponsors');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleEditSponsorInit = (sponsor: Sponsor) => {
+    setEditingSponsorId(sponsor.id);
+    setSponName(sponsor.name);
+    setSponLogo(sponsor.logoUrl);
+    setSponTier(sponsor.tier);
+    setSponUrl(sponsor.websiteUrl || '');
+    setSponDesc(sponsor.description || '');
+    setSponBoothId(sponsor.boothId !== undefined ? sponsor.boothId : '');
+    document.getElementById('sponsor-form')?.scrollIntoView({ behavior: 'smooth' });
+  };
+
+  const handleDeleteSponsor = async (sponsorId: string) => {
+    if (!selectedEventId) return;
+    try {
+      await deleteDoc(doc(db, 'events', selectedEventId, 'sponsors', sponsorId));
+      setDeletingSponsorId(null);
+      alert('Sponsor removed.');
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, 'sponsors');
+    }
+  };
+
+  const handleSaveUpdate = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedEventId) return;
+
+    const errors: Record<string, string> = {};
+    if (!updateMsg) errors.updateMsg = 'Message is required';
+    
+    if (Object.keys(errors).length > 0) {
+      setUpdateErrors(errors);
+      return;
+    }
+
+    setUpdateErrors({});
+    setSaving(true);
+    try {
+      const updateData: Partial<EventUpdate> = {
+        eventId: selectedEventId,
+        message: updateMsg,
+        type: updateType,
+        targetAudience: targetAudience,
+        createdAt: new Date().toISOString()
+      };
+
+      await addDoc(collection(db, 'events', selectedEventId, 'updates'), updateData);
+      setUpdateMsg(''); setUpdateType('info'); setTargetAudience('all');
+    } catch (error) {
+      handleFirestoreError(error, OperationType.CREATE, 'updates');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleDeleteUpdate = async (updateId: string) => {
+    if (!selectedEventId) return;
+    try {
+      await deleteDoc(doc(db, 'events', selectedEventId, 'updates', updateId));
+      setDeletingUpdateId(null);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, 'updates');
+    }
+  };
+
+  const handleBulkPublishSeminars = async () => {
+    if (!selectedEventId || selectedSeminarIds.length === 0) return;
+    setSaving(true);
+    try {
+      const batch = selectedSeminarIds.map(id => 
+        updateDoc(doc(db, 'events', selectedEventId, 'seminars', id), { status: 'published' })
+      );
+      await Promise.all(batch);
+      alert(`Successfully published ${selectedSeminarIds.length} seminars!`);
+      setSelectedSeminarIds([]);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, 'seminars');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleBulkDeleteSeminars = async () => {
+    if (!selectedEventId || selectedSeminarIds.length === 0) return;
+    if (!confirm(`Are you sure you want to delete ${selectedSeminarIds.length} seminars?`)) return;
+    
+    setSaving(true);
+    try {
+      const batch = selectedSeminarIds.map(id => 
+        deleteDoc(doc(db, 'events', selectedEventId, 'seminars', id))
+      );
+      await Promise.all(batch);
+      alert(`Successfully deleted ${selectedSeminarIds.length} seminars!`);
+      setSelectedSeminarIds([]);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, 'seminars');
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -1497,6 +3038,7 @@ const AdminEventManager = ({ events, initialEditEvent }: { events: ExpoEvent[], 
     setSaving(true);
     try {
       await updateDoc(doc(db, path), { status: newStatus });
+      setEditingReg(null);
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, path);
     } finally {
@@ -1524,50 +3066,106 @@ const AdminEventManager = ({ events, initialEditEvent }: { events: ExpoEvent[], 
     >
       {/* Event Creator */}
       <div className="bg-white rounded-lg border border-[#E4E6EB] shadow-sm p-8">
-        <h2 className="text-2xl font-bold text-[#1C1E21] mb-6 tracking-tight">Create New Expo Event</h2>
+        <h2 className="text-2xl font-bold text-[#1C1E21] mb-6 tracking-tight">{editingEventId ? 'Edit Expo Event' : 'Create New Expo Event'}</h2>
         <form onSubmit={handleCreateEvent} className="space-y-5">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
             <div>
-              <label className="block text-[11px] font-bold uppercase text-[#606770] mb-1.5">Event Name</label>
+              <label className="block text-[11px] font-bold uppercase text-[#606770] mb-1.5 flex justify-between">
+                Event Name
+                {eventErrors.name && <span className="text-[#D32F2F] normal-case font-medium">{eventErrors.name}</span>}
+              </label>
               <input 
                 type="text" 
                 value={name}
-                onChange={(e) => setName(e.target.value)}
-                className="w-full bg-[#F0F2F5] border border-[#E4E6EB] rounded px-4 py-2 text-[14px] outline-none focus:border-[#1976D2]"
+                onChange={(e) => {
+                  setName(e.target.value);
+                  if (eventErrors.name) setEventErrors(prev => ({ ...prev, name: '' }));
+                }}
+                className={cn(
+                  "w-full bg-[#F0F2F5] border rounded px-4 py-2 text-[14px] outline-none focus:border-[#1976D2] transition-colors",
+                  eventErrors.name ? "border-[#D32F2F]" : "border-[#E4E6EB]"
+                )}
                 placeholder="e.g. California Black College Expo"
               />
             </div>
             <div>
-              <label className="block text-[11px] font-bold uppercase text-[#606770] mb-1.5">Date</label>
+              <label className="block text-[11px] font-bold uppercase text-[#606770] mb-1.5 flex justify-between">
+                Date
+                {eventErrors.date && <span className="text-[#D32F2F] normal-case font-medium">{eventErrors.date}</span>}
+              </label>
               <input 
                 type="date" 
                 value={date}
-                onChange={(e) => setDate(e.target.value)}
-                className="w-full bg-[#F0F2F5] border border-[#E4E6EB] rounded px-4 py-2 text-[14px] outline-none focus:border-[#1976D2]"
+                onChange={(e) => {
+                  setDate(e.target.value);
+                  if (eventErrors.date) setEventErrors(prev => ({ ...prev, date: '' }));
+                }}
+                className={cn(
+                  "w-full bg-[#F0F2F5] border rounded px-4 py-2 text-[14px] outline-none focus:border-[#1976D2] transition-colors",
+                  eventErrors.date ? "border-[#D32F2F]" : "border-[#E4E6EB]"
+                )}
               />
             </div>
             <div>
-              <label className="block text-[11px] font-bold uppercase text-[#606770] mb-1.5">City</label>
+              <label className="block text-[11px] font-bold uppercase text-[#606770] mb-1.5 flex justify-between">
+                City
+                {eventErrors.city && <span className="text-[#D32F2F] normal-case font-medium">{eventErrors.city}</span>}
+              </label>
               <input 
                 type="text" 
                 value={city}
-                onChange={(e) => setCity(e.target.value)}
-                className="w-full bg-[#F0F2F5] border border-[#E4E6EB] rounded px-4 py-2 text-[14px] outline-none focus:border-[#1976D2]"
+                onChange={(e) => {
+                  setCity(e.target.value);
+                  if (eventErrors.city) setEventErrors(prev => ({ ...prev, city: '' }));
+                }}
+                className={cn(
+                  "w-full bg-[#F0F2F5] border rounded px-4 py-2 text-[14px] outline-none focus:border-[#1976D2] transition-colors",
+                  eventErrors.city ? "border-[#D32F2F]" : "border-[#E4E6EB]"
+                )}
                 placeholder="e.g. Los Angeles"
               />
             </div>
             <div>
-              <label className="block text-[11px] font-bold uppercase text-[#606770] mb-1.5">Venue Location</label>
+              <label className="block text-[11px] font-bold uppercase text-[#606770] mb-1.5 flex justify-between">
+                Location
+                {eventErrors.location && <span className="text-[#D32F2F] normal-case font-medium">{eventErrors.location}</span>}
+              </label>
               <input 
                 type="text" 
                 value={location}
-                onChange={(e) => setLocation(e.target.value)}
-                className="w-full bg-[#F0F2F5] border border-[#E4E6EB] rounded px-4 py-2 text-[14px] outline-none focus:border-[#1976D2]"
+                onChange={(e) => {
+                  setLocation(e.target.value);
+                  if (eventErrors.location) setEventErrors(prev => ({ ...prev, location: '' }));
+                }}
+                className={cn(
+                  "w-full bg-[#F0F2F5] border rounded px-4 py-2 text-[14px] outline-none focus:border-[#1976D2] transition-colors",
+                  eventErrors.location ? "border-[#D32F2F]" : "border-[#E4E6EB]"
+                )}
                 placeholder="e.g. LA Convention Center"
               />
             </div>
             <div>
-              <label className="block text-[11px] font-bold uppercase text-[#606770] mb-1.5">Map PDF URL</label>
+              <label className="block text-[11px] font-bold uppercase text-[#606770] mb-1.5 flex justify-between">
+                Timezone
+              </label>
+              <select 
+                value={timezone}
+                onChange={(e) => setTimezone(e.target.value)}
+                className="w-full bg-[#F0F2F5] border border-[#E4E6EB] rounded px-4 py-2 text-[14px] outline-none focus:border-[#1976D2]"
+              >
+                <option value="">Select Timezone</option>
+                <option value="America/New_York">Eastern Time (ET)</option>
+                <option value="America/Chicago">Central Time (CT)</option>
+                <option value="America/Denver">Mountain Time (MT)</option>
+                <option value="America/Los_Angeles">Pacific Time (PT)</option>
+                <option value="America/Anchorage">Alaska Time (AKT)</option>
+                <option value="Pacific/Honolulu">Hawaii-Aleutian Time (HAT)</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-[11px] font-bold uppercase text-[#606770] mb-1.5 flex justify-between">
+                Map URL
+              </label>
               <input 
                 type="text" 
                 value={mapUrl}
@@ -1576,30 +3174,74 @@ const AdminEventManager = ({ events, initialEditEvent }: { events: ExpoEvent[], 
                 placeholder="https://..."
               />
             </div>
+            <div>
+              <label className="block text-[11px] font-bold uppercase text-[#606770] mb-1.5 flex justify-between">
+                Floor Plan URL
+              </label>
+              <div className="flex gap-2">
+                <input 
+                  type="text" 
+                  value={floorPlanUrl}
+                  onChange={(e) => setFloorPlanUrl(e.target.value)}
+                  className="flex-grow bg-[#F0F2F5] border border-[#E4E6EB] rounded px-4 py-2 text-[14px] outline-none focus:border-[#1976D2]"
+                  placeholder="Link to JPG/PNG floor plan"
+                />
+                <button 
+                  type="button" 
+                  onClick={() => {
+                    const url = prompt('Enter image URL for Floor Plan:');
+                    if (url) setFloorPlanUrl(url);
+                  }}
+                  className="bg-white border border-[#E4E6EB] px-3 rounded hover:bg-[#F0F2F5] transition-colors"
+                >
+                  <MapPin className="w-4 h-4 text-[#606770]" />
+                </button>
+              </div>
+            </div>
           </div>
           <div>
-            <label className="block text-[11px] font-bold uppercase text-[#606770] mb-1.5">Event Description</label>
+            <label className="block text-[11px] font-bold uppercase text-[#606770] mb-1.5 flex justify-between">
+              Description
+              {eventErrors.description && <span className="text-[#D32F2F] normal-case font-medium">{eventErrors.description}</span>}
+            </label>
             <textarea 
               value={description}
-              onChange={(e) => setDescription(e.target.value)}
+              onChange={(e) => {
+                setDescription(e.target.value);
+                if (eventErrors.description) setEventErrors(prev => ({ ...prev, description: '' }));
+              }}
               rows={4}
-              className="w-full bg-[#F0F2F5] border border-[#E4E6EB] rounded px-4 py-2 text-[14px] outline-none focus:border-[#1976D2] resize-none"
+              className={cn(
+                "w-full bg-[#F0F2F5] border rounded px-4 py-2 text-[14px] outline-none focus:border-[#1976D2] resize-none transition-colors",
+                eventErrors.description ? "border-[#D32F2F]" : "border-[#E4E6EB]"
+              )}
               placeholder="Tell attendees what to expect..."
             />
           </div>
-          <div className="pt-4 flex gap-3">
+          <div className="pt-4 flex flex-wrap gap-3">
             <button 
               type="submit"
               disabled={saving}
               className="flex-grow md:flex-none px-8 py-3 bg-[#D32F2F] text-white font-bold rounded hover:bg-black transition-colors disabled:opacity-50"
             >
-              {saving ? 'Processing...' : editingEventId ? 'Update Expo Event' : 'Launch Expo Event'}
+              <div className="flex items-center justify-center gap-2">
+                <Send className="w-4 h-4" />
+                {saving ? 'Processing...' : editingEventId ? 'Update & Launch' : 'Launch Expo Event'}
+              </div>
+            </button>
+            <button 
+              type="button"
+              onClick={handleSaveDraftEvent}
+              disabled={saving}
+              className="flex-grow md:flex-none px-6 py-3 bg-[#F0F2F5] text-[#1C1E21] font-bold rounded hover:bg-[#E4E6EB] transition-colors disabled:opacity-50 border border-[#E4E6EB]"
+            >
+              {editingEventId ? 'Save as Draft' : 'Save Draft'}
             </button>
             {editingEventId && (
               <button 
                 type="button"
                 onClick={handleCancelEdit}
-                className="px-6 py-3 bg-[#F0F2F5] text-[#606770] font-bold rounded hover:bg-[#E4E6EB]"
+                className="px-6 py-3 bg-white text-[#606770] font-bold rounded hover:bg-[#F0F2F5] border border-[#E4E6EB]"
               >
                 Cancel Edit
               </button>
@@ -1621,14 +3263,34 @@ const AdminEventManager = ({ events, initialEditEvent }: { events: ExpoEvent[], 
                   "flex items-center justify-between p-4 transition-colors",
                   selectedEventId === event.id ? "bg-[#F8F9FA]" : "hover:bg-[#F8F9FA]"
                 )}>
-                  <div className="flex-grow cursor-pointer" onClick={() => setSelectedEventId(selectedEventId === event.id ? '' : event.id)}>
+                      <div className="flex-grow cursor-pointer" onClick={() => {
+                        const newId = selectedEventId === event.id ? '' : event.id;
+                        setSelectedEventId(newId);
+                        setSelectedSeminarIds([]);
+                      }}>
                     <div className="font-bold text-[#1C1E21] text-[15px] flex items-center gap-2">
                       {event.name}
+                      <span className={cn(
+                        "text-[9px] px-1.5 py-0.5 rounded font-black uppercase",
+                        event.status === 'draft' ? "bg-[#FFF5F5] text-[#D32F2F] border border-[#FFEBEE]" : "bg-[#E8F5E9] text-[#2E7D32] border border-[#C8E6C9]"
+                      )}>
+                        {event.status === 'draft' ? 'Draft' : 'Published'}
+                      </span>
                       {selectedEventId === event.id ? <ChevronRight className="w-3 h-3 rotate-90 transition-transform" /> : <ChevronRight className="w-3 h-3 transition-transform" />}
                     </div>
                     <div className="text-[12px] text-[#606770]">{event.city} • {format(new Date(event.date), 'MMM dd, yyyy')}</div>
                   </div>
                   <div className="flex items-center gap-2">
+                    <button 
+                      onClick={() => handleToggleEventStatus(event)}
+                      className={cn(
+                        "p-2 rounded-lg transition-colors flex items-center gap-1.5",
+                        event.status === 'published' ? "text-[#1976D2] hover:bg-[#E3F2FD]" : "text-[#606770] hover:bg-[#F0F2F5]"
+                      )}
+                      title={event.status === 'published' ? "Unpublish Event" : "Publish Event"}
+                    >
+                      {event.status === 'published' ? <Eye className="w-4 h-4" /> : <EyeOff className="w-4 h-4" />}
+                    </button>
                     <button 
                       onClick={() => setSelectedEventId(selectedEventId === event.id ? '' : event.id)}
                       className={cn(
@@ -1666,8 +3328,27 @@ const AdminEventManager = ({ events, initialEditEvent }: { events: ExpoEvent[], 
                       className="border-t border-[#F0F2F5] bg-[#F8F9FA]/50"
                     >
                       <div className="p-4 space-y-4">
-                        <div className="flex items-center justify-between">
-                          <h4 className="text-[11px] font-bold uppercase text-[#606770] tracking-wider">Event Schedule / Seminars</h4>
+                        <div className="flex items-center justify-between px-1">
+                          <div className="flex items-center gap-3">
+                            <h4 className="text-[11px] font-bold uppercase text-[#606770] tracking-wider">Event Schedule / Seminars</h4>
+                            {seminarsForSelectedEvent.length > 0 && (
+                              <label className="flex items-center gap-2 cursor-pointer group">
+                                <input 
+                                  type="checkbox" 
+                                  className="w-3 h-3 rounded border-[#E4E6EB] text-[#1976D2] focus:ring-[#1976D2]"
+                                  checked={selectedSeminarIds.length === seminarsForSelectedEvent.length && seminarsForSelectedEvent.length > 0}
+                                  onChange={(e) => {
+                                    if (e.target.checked) {
+                                      setSelectedSeminarIds(seminarsForSelectedEvent.map(s => s.id));
+                                    } else {
+                                      setSelectedSeminarIds([]);
+                                    }
+                                  }}
+                                />
+                                <span className="text-[10px] font-bold text-[#606770] group-hover:text-[#1C1E21] transition-colors">Select All</span>
+                              </label>
+                            )}
+                          </div>
                           <button 
                             onClick={() => document.getElementById('seminar-form')?.scrollIntoView({ behavior: 'smooth' })}
                             className="text-[11px] font-bold text-[#1976D2] hover:underline"
@@ -1675,6 +3356,32 @@ const AdminEventManager = ({ events, initialEditEvent }: { events: ExpoEvent[], 
                             + Add New Seminar
                           </button>
                         </div>
+
+                        {selectedSeminarIds.length > 0 && (
+                          <div className="bg-[#E3F2FD] border border-[#BBDEFB] rounded-lg p-3 flex items-center justify-between">
+                            <span className="text-[12px] font-bold text-[#1976D2]">
+                              {selectedSeminarIds.length} seminar{selectedSeminarIds.length !== 1 ? 's' : ''} selected
+                            </span>
+                            <div className="flex gap-2">
+                              <button 
+                                onClick={handleBulkPublishSeminars}
+                                disabled={saving}
+                                className="px-3 py-1 bg-white text-[#1976D2] text-[11px] font-bold rounded-md border border-[#BBDEFB] hover:bg-[#1976D2] hover:text-white transition-all flex items-center gap-1.5"
+                              >
+                                <Send className="w-3 h-3" />
+                                Publish Selected
+                              </button>
+                              <button 
+                                onClick={handleBulkDeleteSeminars}
+                                disabled={saving}
+                                className="px-3 py-1 bg-white text-[#D32F2F] text-[11px] font-bold rounded-md border border-[#FFEBEE] hover:bg-[#D32F2F] hover:text-white transition-all flex items-center gap-1.5"
+                              >
+                                <Trash2 className="w-3 h-3" />
+                                Delete Selected
+                              </button>
+                            </div>
+                          </div>
+                        )}
 
                         <div className="space-y-2">
                           {loadingSeminars ? (
@@ -1686,9 +3393,24 @@ const AdminEventManager = ({ events, initialEditEvent }: { events: ExpoEvent[], 
                             <div className="py-6 text-center text-[12px] text-[#606770] italic">No seminars scheduled for this expo.</div>
                           ) : (
                             seminarsForSelectedEvent.map(sem => (
-                              <div key={sem.id} className="flex items-center justify-between p-3 bg-white border border-[#E4E6EB] rounded-lg shadow-sm">
+                              <div key={sem.id} className="flex items-center gap-3 p-3 bg-white border border-[#E4E6EB] rounded-lg shadow-sm hover:border-[#BBDEFB] transition-colors group">
+                                <input 
+                                  type="checkbox" 
+                                  className="w-4 h-4 rounded border-[#E4E6EB] text-[#1976D2] focus:ring-[#1976D2] cursor-pointer"
+                                  checked={selectedSeminarIds.includes(sem.id)}
+                                  onChange={(e) => {
+                                    if (e.target.checked) {
+                                      setSelectedSeminarIds(prev => [...prev, sem.id]);
+                                    } else {
+                                      setSelectedSeminarIds(prev => prev.filter(id => id !== sem.id));
+                                    }
+                                  }}
+                                />
                                 <div className="flex-grow">
-                                  <div className="text-[13px] font-bold text-[#1C1E21]">{sem.title}</div>
+                                  <div className="text-[13px] font-bold text-[#1C1E21] flex items-center gap-2">
+                                    {sem.title}
+                                    {sem.status === 'draft' && <span className="text-[8px] border border-[#606770] text-[#606770] px-1 rounded uppercase font-black">Draft</span>}
+                                  </div>
                                   <div className="text-[11px] text-[#606770] flex items-center gap-2 mt-0.5">
                                     <span className="font-semibold text-[#D32F2F]">{sem.time}</span>
                                     <span>•</span>
@@ -1855,24 +3577,24 @@ const AdminEventManager = ({ events, initialEditEvent }: { events: ExpoEvent[], 
                       {reg.registeredAt ? format(new Date(reg.registeredAt), 'MMM dd, yyyy p') : 'N/A'}
                     </td>
                     <td className="px-4 py-3">
-                      <select
-                        value={reg.status || 'confirmed'}
-                        disabled={saving}
-                        onChange={(e) => handleUpdateRegStatus(reg.path, e.target.value)}
-                        className={cn(
-                          "px-2 py-0.5 rounded font-bold text-[10px] uppercase border-none focus:ring-2 focus:ring-[#1976D2] outline-none cursor-pointer transition-all",
-                          reg.status === 'confirmed' ? "bg-[#E8F5E9] text-[#2E7D32]" : 
-                          reg.status === 'pending' ? "bg-[#FFF3E0] text-[#E65100]" :
-                          "bg-[#FFF5F5] text-[#D32F2F]"
-                        )}
-                      >
-                        <option value="confirmed">Confirmed</option>
-                        <option value="pending">Pending</option>
-                        <option value="cancelled">Cancelled</option>
-                      </select>
+                      <span className={cn(
+                        "inline-block px-2 py-0.5 rounded font-bold text-[10px] uppercase",
+                        reg.status === 'confirmed' ? "bg-[#E8F5E9] text-[#2E7D32]" : 
+                        reg.status === 'pending' ? "bg-[#FFF3E0] text-[#E65100]" :
+                        "bg-[#FFF5F5] text-[#D32F2F]"
+                      )}>
+                        {reg.status || 'confirmed'}
+                      </span>
                     </td>
                     <td className="px-4 py-3 text-right">
                       <div className="flex justify-end gap-1">
+                        <button 
+                          onClick={() => setEditingReg(reg)}
+                          className="p-1.5 text-[#606770] hover:text-[#1976D2] transition-colors"
+                          title="Change Status"
+                        >
+                          <Edit2 className="w-3.5 h-3.5" />
+                        </button>
                         <button 
                           onClick={() => setDeletingReg(reg)}
                           className="p-1.5 text-[#606770] hover:text-[#D32F2F] transition-colors"
@@ -1895,6 +3617,51 @@ const AdminEventManager = ({ events, initialEditEvent }: { events: ExpoEvent[], 
           </table>
         </div>
       </div>
+
+      {/* Reg Status Modal */}
+      <AnimatePresence>
+        {editingReg && (
+          <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[110] flex items-center justify-center p-4">
+            <motion.div 
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              className="bg-white rounded-2xl shadow-2xl p-8 max-w-sm w-full"
+            >
+              <h3 className="text-xl font-bold text-[#1C1E21] mb-2">Update Status</h3>
+              <p className="text-[13px] text-[#606770] mb-6">Change registration status for <span className="font-bold text-[#1C1E21]">{editingReg.userName}</span>.</p>
+              
+              <div className="space-y-3 mb-8">
+                {['confirmed', 'pending', 'cancelled'].map(status => (
+                  <button
+                    key={status}
+                    onClick={() => handleUpdateRegStatus(editingReg.path, status)}
+                    disabled={saving}
+                    className={cn(
+                      "w-full py-3 px-4 rounded-xl border flex items-center justify-between font-bold text-[14px] transition-all",
+                      editingReg.status === status 
+                        ? (status === 'confirmed' ? "bg-[#2E7D32] text-white border-[#2E7D32]" : 
+                           status === 'pending' ? "bg-[#E65100] text-white border-[#E65100]" :
+                           "bg-[#D32F2F] text-white border-[#D32F2F]")
+                        : "bg-white text-[#1C1E21] border-[#E4E6EB] hover:border-[#1976D2]"
+                    )}
+                  >
+                    <span className="capitalize">{status}</span>
+                    {editingReg.status === status && <div className="w-2 h-2 bg-white rounded-full" />}
+                  </button>
+                ))}
+              </div>
+
+              <button 
+                onClick={() => setEditingReg(null)}
+                className="w-full py-3 bg-[#F0F2F5] text-[#1C1E21] font-bold rounded-xl hover:bg-[#E4E6EB]"
+              >
+                Cancel
+              </button>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
 
       {/* Reg Delete Confirm Modal */}
       <AnimatePresence>
@@ -1943,11 +3710,20 @@ const AdminEventManager = ({ events, initialEditEvent }: { events: ExpoEvent[], 
         
         <form onSubmit={handleCreateSeminar} className="space-y-5">
           <div>
-            <label className="block text-[11px] font-bold uppercase text-[#606770] mb-1.5">Select Event</label>
+            <label className="block text-[11px] font-bold uppercase text-[#606770] mb-1.5 flex justify-between">
+              Select Event
+              {seminarErrors.selectedEventId && <span className="text-[#D32F2F] normal-case font-medium">{seminarErrors.selectedEventId}</span>}
+            </label>
             <select 
               value={selectedEventId}
-              onChange={(e) => setSelectedEventId(e.target.value)}
-              className="w-full bg-[#F0F2F5] border border-[#E4E6EB] rounded px-4 py-2 text-[14px] outline-none focus:border-[#1976D2]"
+              onChange={(e) => {
+                setSelectedEventId(e.target.value);
+                if (seminarErrors.selectedEventId) setSeminarErrors(prev => ({ ...prev, selectedEventId: '' }));
+              }}
+              className={cn(
+                "w-full bg-[#F0F2F5] border rounded px-4 py-2 text-[14px] outline-none focus:border-[#1976D2] transition-colors",
+                seminarErrors.selectedEventId ? "border-[#D32F2F]" : "border-[#E4E6EB]"
+              )}
             >
               <option value="">Choose an existing event...</option>
               {events.map(ev => (
@@ -1958,51 +3734,96 @@ const AdminEventManager = ({ events, initialEditEvent }: { events: ExpoEvent[], 
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
             <div>
-              <label className="block text-[11px] font-bold uppercase text-[#606770] mb-1.5">Seminar Title</label>
+              <label className="block text-[11px] font-bold uppercase text-[#606770] mb-1.5 flex justify-between">
+                Seminar Title
+                {seminarErrors.sTitle && <span className="text-[#D32F2F] normal-case font-medium">{seminarErrors.sTitle}</span>}
+              </label>
               <input 
                 type="text" 
                 value={sTitle}
-                onChange={(e) => setSTitle(e.target.value)}
-                className="w-full bg-[#F0F2F5] border border-[#E4E6EB] rounded px-4 py-2 text-[14px] outline-none focus:border-[#1976D2]"
+                onChange={(e) => {
+                  setSTitle(e.target.value);
+                  if (seminarErrors.sTitle) setSeminarErrors(prev => ({ ...prev, sTitle: '' }));
+                }}
+                className={cn(
+                  "w-full bg-[#F0F2F5] border rounded px-4 py-2 text-[14px] outline-none focus:border-[#1976D2] transition-colors",
+                  seminarErrors.sTitle ? "border-[#D32F2F]" : "border-[#E4E6EB]"
+                )}
                 placeholder="e.g. Scholarships 101"
               />
             </div>
             <div>
-              <label className="block text-[11px] font-bold uppercase text-[#606770] mb-1.5">Speaker / Panelists</label>
+              <label className="block text-[11px] font-bold uppercase text-[#606770] mb-1.5 flex justify-between">
+                Speaker / Panelists
+                {seminarErrors.sSpeaker && <span className="text-[#D32F2F] normal-case font-medium">{seminarErrors.sSpeaker}</span>}
+              </label>
               <input 
                 type="text" 
                 value={sSpeaker}
-                onChange={(e) => setSSpeaker(e.target.value)}
-                className="w-full bg-[#F0F2F5] border border-[#E4E6EB] rounded px-4 py-2 text-[14px] outline-none focus:border-[#1976D2]"
+                onChange={(e) => {
+                  setSSpeaker(e.target.value);
+                  if (seminarErrors.sSpeaker) setSeminarErrors(prev => ({ ...prev, sSpeaker: '' }));
+                }}
+                className={cn(
+                  "w-full bg-[#F0F2F5] border rounded px-4 py-2 text-[14px] outline-none focus:border-[#1976D2] transition-colors",
+                  seminarErrors.sSpeaker ? "border-[#D32F2F]" : "border-[#E4E6EB]"
+                )}
                 placeholder="e.g. Dr. Theresa Price"
               />
             </div>
             <div>
-              <label className="block text-[11px] font-bold uppercase text-[#606770] mb-1.5">Start Time</label>
+              <label className="block text-[11px] font-bold uppercase text-[#606770] mb-1.5 flex justify-between">
+                Start Time
+                {seminarErrors.sTime && <span className="text-[#D32F2F] normal-case font-medium">{seminarErrors.sTime}</span>}
+              </label>
               <input 
                 type="text" 
                 value={sTime}
-                onChange={(e) => setSTime(e.target.value)}
-                className="w-full bg-[#F0F2F5] border border-[#E4E6EB] rounded px-4 py-2 text-[14px] outline-none focus:border-[#1976D2]"
+                onChange={(e) => {
+                  setSTime(e.target.value);
+                  if (seminarErrors.sTime) setSeminarErrors(prev => ({ ...prev, sTime: '' }));
+                }}
+                className={cn(
+                  "w-full bg-[#F0F2F5] border rounded px-4 py-2 text-[14px] outline-none focus:border-[#1976D2] transition-colors",
+                  seminarErrors.sTime ? "border-[#D32F2F]" : "border-[#E4E6EB]"
+                )}
                 placeholder="e.g. 10:30 AM"
               />
             </div>
             <div>
-              <label className="block text-[11px] font-bold uppercase text-[#606770] mb-1.5">Room / Location</label>
+              <label className="block text-[11px] font-bold uppercase text-[#606770] mb-1.5 flex justify-between">
+                Room / Location
+                {seminarErrors.sRoom && <span className="text-[#D32F2F] normal-case font-medium">{seminarErrors.sRoom}</span>}
+              </label>
               <input 
                 type="text" 
                 value={sRoom}
-                onChange={(e) => setSRoom(e.target.value)}
-                className="w-full bg-[#F0F2F5] border border-[#E4E6EB] rounded px-4 py-2 text-[14px] outline-none focus:border-[#1976D2]"
+                onChange={(e) => {
+                  setSRoom(e.target.value);
+                  if (seminarErrors.sRoom) setSeminarErrors(prev => ({ ...prev, sRoom: '' }));
+                }}
+                className={cn(
+                  "w-full bg-[#F0F2F5] border rounded px-4 py-2 text-[14px] outline-none focus:border-[#1976D2] transition-colors",
+                  seminarErrors.sRoom ? "border-[#D32F2F]" : "border-[#E4E6EB]"
+                )}
                 placeholder="e.g. Main Hall Stage"
               />
             </div>
             <div>
-              <label className="block text-[11px] font-bold uppercase text-[#606770] mb-1.5">Category</label>
+              <label className="block text-[11px] font-bold uppercase text-[#606770] mb-1.5 flex justify-between">
+                Category
+                {seminarErrors.sCategory && <span className="text-[#D32F2F] normal-case font-medium">{seminarErrors.sCategory}</span>}
+              </label>
               <select 
                 value={sCategory}
-                onChange={(e) => setSCategory(e.target.value)}
-                className="w-full bg-[#F0F2F5] border border-[#E4E6EB] rounded px-4 py-2 text-[14px] outline-none focus:border-[#1976D2]"
+                onChange={(e) => {
+                  setSCategory(e.target.value);
+                  if (seminarErrors.sCategory) setSeminarErrors(prev => ({ ...prev, sCategory: '' }));
+                }}
+                className={cn(
+                  "w-full bg-[#F0F2F5] border rounded px-4 py-2 text-[14px] outline-none focus:border-[#1976D2] transition-colors",
+                  seminarErrors.sCategory ? "border-[#D32F2F]" : "border-[#E4E6EB]"
+                )}
               >
                 <option value="">Select Category...</option>
                 <option value="Scholarships">Scholarships</option>
@@ -2023,19 +3844,30 @@ const AdminEventManager = ({ events, initialEditEvent }: { events: ExpoEvent[], 
             </div>
           </div>
 
-          <div className="pt-4 flex gap-3">
+          <div className="pt-4 flex flex-wrap gap-3">
             <button 
               type="submit"
               disabled={saving}
               className="w-full md:w-auto px-8 py-3 bg-[#1976D2] text-white font-bold rounded hover:bg-black transition-colors disabled:opacity-50"
             >
-              {saving ? 'Processing...' : editingSeminarId ? 'Update Seminar' : 'Publish Seminar'}
+              <div className="flex items-center justify-center gap-2">
+                <Send className="w-4 h-4" />
+                {saving ? 'Processing...' : editingSeminarId ? 'Update & Publish' : 'Publish Seminar'}
+              </div>
+            </button>
+            <button 
+              type="button"
+              onClick={handleSaveDraftSeminar}
+              disabled={saving}
+              className="w-full md:w-auto px-6 py-3 bg-[#F0F2F5] text-[#1C1E21] font-bold rounded hover:bg-[#E4E6EB] transition-colors disabled:opacity-50 border border-[#E4E6EB]"
+            >
+              {editingSeminarId ? 'Save as Draft' : 'Save Draft'}
             </button>
             {editingSeminarId && (
               <button 
                 type="button"
                 onClick={handleCancelSeminarEdit}
-                className="px-6 py-3 bg-[#F0F2F5] text-[#606770] font-bold rounded hover:bg-[#E4E6EB]"
+                className="px-6 py-3 bg-white text-[#606770] font-bold rounded hover:bg-[#F0F2F5] border border-[#E4E6EB]"
               >
                 Cancel
               </button>
@@ -2078,7 +3910,7 @@ const AdminEventManager = ({ events, initialEditEvent }: { events: ExpoEvent[], 
                 <Trash2 className="w-6 h-6" />
               </div>
               <h3 className="text-lg font-bold text-[#1C1E21] mb-2">Delete Seminar?</h3>
-              <p className="text-[13px] text-[#606770] mb-6">Are you sure you want to delete this seminar? This cannot be undone.</p>
+              <p className="text-[13px] text-[#606770] mb-6">Are you sure you want to delete this seminar? This action cannot be undone.</p>
               <div className="flex gap-3">
                 <button 
                   onClick={() => setDeletingSeminarId(null)}
@@ -2097,7 +3929,396 @@ const AdminEventManager = ({ events, initialEditEvent }: { events: ExpoEvent[], 
           </div>
         )}
       </AnimatePresence>
+
+      {/* Sponsor Highlights Creator */}
+      <div id="sponsor-form" className="bg-white rounded-lg border border-[#E4E6EB] shadow-sm p-8">
+        <div className="flex items-center gap-3 mb-6">
+          <Star className="w-5 h-5 text-[#E65100]" />
+          <h2 className="text-2xl font-bold text-[#1C1E21] tracking-tight">Highlight Sponsors</h2>
+        </div>
+        
+        <form onSubmit={handleSaveSponsor} className="space-y-5">
+           <div>
+            <label className="block text-[11px] font-bold uppercase text-[#606770] mb-1.5 flex justify-between">
+              Select Event
+              {/* Reuse selectedEventId from seminars or have separate? Let's use the same selectedEventId for convenience */}
+            </label>
+            <select 
+              value={selectedEventId}
+              onChange={(e) => setSelectedEventId(e.target.value)}
+              className="w-full bg-[#F0F2F5] border border-[#E4E6EB] rounded px-4 py-2 text-[14px] outline-none focus:border-[#1976D2] transition-colors"
+            >
+              <option value="">Choose an event to add sponsors to...</option>
+              {events.map(ev => (
+                <option key={ev.id} value={ev.id}>{ev.name} ({ev.city})</option>
+              ))}
+            </select>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+            <div>
+              <label className="block text-[11px] font-bold uppercase text-[#606770] mb-1.5 flex justify-between">
+                Sponsor Name
+                {sponsorErrors.sponName && <span className="text-[#D32F2F] normal-case font-medium">{sponsorErrors.sponName}</span>}
+              </label>
+              <input 
+                type="text" 
+                value={sponName}
+                onChange={(e) => setSponName(e.target.value)}
+                className="w-full bg-[#F0F2F5] border border-[#E4E6EB] rounded px-4 py-2 text-[14px] outline-none focus:border-[#1976D2] transition-colors"
+                placeholder="e.g. Google, IBM, local bank"
+              />
+            </div>
+            <div>
+              <label className="block text-[11px] font-bold uppercase text-[#606770] mb-1.5 flex justify-between">
+                Logo URL (PNG/JPG)
+                {sponsorErrors.sponLogo && <span className="text-[#D32F2F] normal-case font-medium">{sponsorErrors.sponLogo}</span>}
+              </label>
+              <input 
+                type="text" 
+                value={sponLogo}
+                onChange={(e) => setSponLogo(e.target.value)}
+                className="w-full bg-[#F0F2F5] border border-[#E4E6EB] rounded px-4 py-2 text-[14px] outline-none focus:border-[#1976D2] transition-colors"
+                placeholder="https://..."
+              />
+            </div>
+            <div>
+              <label className="block text-[11px] font-bold uppercase text-[#606770] mb-1.5">Sponsorship Tier</label>
+              <select 
+                value={sponTier}
+                onChange={(e) => setSponTier(e.target.value as Sponsor['tier'])}
+                className="w-full bg-[#F0F2F5] border border-[#E4E6EB] rounded px-4 py-2 text-[14px] outline-none focus:border-[#1976D2] transition-colors"
+              >
+                <option value="platinum">Platinum Partner</option>
+                <option value="gold">Gold Sponsor</option>
+                <option value="silver">Silver Sponsor</option>
+                <option value="bronze">Bronze Sponsor</option>
+                <option value="exhibitor">Exhibitor</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-[11px] font-bold uppercase text-[#606770] mb-1.5">Website URL (Optional)</label>
+              <input 
+                type="text" 
+                value={sponUrl}
+                onChange={(e) => setSponUrl(e.target.value)}
+                className="w-full bg-[#F0F2F5] border border-[#E4E6EB] rounded px-4 py-2 text-[14px] outline-none focus:border-[#1976D2] transition-colors"
+                placeholder="https://..."
+              />
+            </div>
+            <div className="md:col-span-2">
+              <label className="block text-[11px] font-bold uppercase text-[#606770] mb-1.5">Tagline / Description (Optional)</label>
+              <textarea 
+                value={sponDesc}
+                onChange={(e) => setSponDesc(e.target.value)}
+                className="w-full bg-[#F0F2F5] border border-[#E4E6EB] rounded px-4 py-2 text-[14px] outline-none focus:border-[#1976D2] min-h-[60px] resize-none"
+                placeholder="Short sentence about the sponsor..."
+              />
+            </div>
+            <div className="md:col-span-2">
+              <label className="block text-[11px] font-bold uppercase text-[#606770] mb-1.5">Map to Booth (Optional)</label>
+              <select
+                value={sponBoothId}
+                onChange={(e) => setSponBoothId(e.target.value === '' ? '' : Number(e.target.value))}
+                className="w-full bg-[#F0F2F5] border border-[#E4E6EB] rounded px-4 py-2 text-[14px] outline-none focus:border-[#1976D2]"
+              >
+                <option value="">-- No Booth Assigned --</option>
+                {PLACEHOLDER_BOOTHS.map(b => (
+                  <option key={b.id} value={b.id}>{b.name} ({b.type})</option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          <div className="pt-4">
+            <button 
+              type="submit"
+              disabled={saving || !selectedEventId}
+              className="w-full md:w-auto px-8 py-3 bg-[#E65100] text-white font-bold rounded hover:bg-black transition-colors disabled:opacity-50 shadow-lg shadow-[#E65100]/20"
+            >
+              {saving ? 'Processing...' : editingSponsorId ? 'Update Sponsor' : 'Add Sponsor to Highlights'}
+            </button>
+          </div>
+        </form>
+
+        {/* Existing Sponsors List */}
+        {selectedEventId && sponsorsForSelectedEvent.length > 0 && (
+          <div className="mt-10 pt-8 border-t border-[#F0F2F5]">
+            <h4 className="text-[11px] font-bold uppercase text-[#606770] mb-4">Sponsors for Selected Event</h4>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              {sponsorsForSelectedEvent.map(spon => (
+                <div key={spon.id} className="p-4 bg-[#F8F9FA] rounded-xl border border-[#E4E6EB] flex items-center gap-4">
+                   <div className="w-12 h-12 rounded bg-white p-1 border border-[#E4E6EB] shrink-0">
+                     <img src={spon.logoUrl} alt="" className="w-full h-full object-contain" referrerPolicy="no-referrer" />
+                   </div>
+                   <div className="flex-grow min-w-0">
+                     <div className="text-[13px] font-bold text-[#1C1E21] truncate">{spon.name}</div>
+                     <div className="text-[10px] text-[#E65100] font-bold uppercase tracking-wider">{spon.tier}</div>
+                     {spon.websiteUrl && (
+                       <div className="text-[10px] text-[#1976D2] truncate opacity-80 mt-0.5">{spon.websiteUrl}</div>
+                     )}
+                   </div>
+                   <div className="flex gap-1 shrink-0">
+                     <button onClick={() => handleEditSponsorInit(spon)} className="p-1.5 text-[#606770] hover:text-[#1976D2]"><Edit2 className="w-3.5 h-3.5" /></button>
+                     <button onClick={() => setDeletingSponsorId(spon.id)} className="p-1.5 text-[#606770] hover:text-[#D32F2F]"><Trash2 className="w-3.5 h-3.5" /></button>
+                   </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+
+      <AnimatePresence>
+        {deletingSponsorId && (
+          <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[100] flex items-center justify-center p-4 text-center">
+            <motion.div initial={{ scale: 0.9 }} animate={{ scale: 1 }} className="bg-white rounded-2xl p-8 max-w-sm w-full">
+              <Trash2 className="w-12 h-12 text-[#D32F2F] mx-auto mb-4" />
+              <h3 className="text-xl font-bold mb-2">Remove Sponsor?</h3>
+              <p className="text-[14px] text-[#606770] mb-6">Are you sure? This will remove them from the event dashboard.</p>
+              <div className="flex gap-3">
+                <button onClick={() => setDeletingSponsorId(null)} className="flex-grow py-3 bg-[#F0F2F5] rounded-xl font-bold">Keep</button>
+                <button onClick={() => handleDeleteSponsor(deletingSponsorId)} className="flex-grow py-3 bg-[#D32F2F] text-white rounded-xl font-bold">Delete</button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Broadcast Updates Creator */}
+      <div className="bg-white rounded-lg border border-[#E4E6EB] shadow-sm p-8">
+        <div className="flex items-center gap-3 mb-6">
+          <Bell className="w-5 h-5 text-[#1976D2]" />
+          <h2 className="text-2xl font-bold text-[#1C1E21] tracking-tight">Broadcast Updates</h2>
+        </div>
+        
+        <form onSubmit={handleSaveUpdate} className="space-y-5">
+           <div>
+            <label className="block text-[11px] font-bold uppercase text-[#606770] mb-1.5 flex justify-between">
+              Select Event
+            </label>
+            <select 
+              value={selectedEventId}
+              onChange={(e) => setSelectedEventId(e.target.value)}
+              className="w-full bg-[#F0F2F5] border border-[#E4E6EB] rounded px-4 py-2 text-[14px] outline-none focus:border-[#1976D2] transition-colors"
+            >
+              <option value="">Choose an event...</option>
+              {events.map(ev => (
+                <option key={ev.id} value={ev.id}>{ev.name} ({ev.city})</option>
+              ))}
+            </select>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+            <div className="md:col-span-2">
+              <label className="block text-[11px] font-bold uppercase text-[#606770] mb-1.5 flex justify-between">
+                Announcement / Update Message
+                {updateErrors.updateMsg && <span className="text-[#D32F2F] normal-case font-medium">{updateErrors.updateMsg}</span>}
+              </label>
+              <input 
+                type="text" 
+                value={updateMsg}
+                onChange={(e) => setUpdateMsg(e.target.value)}
+                className="w-full bg-[#F0F2F5] border border-[#E4E6EB] rounded px-4 py-2 text-[14px] outline-none focus:border-[#1976D2] transition-colors"
+                placeholder="e.g. Room change: College Prep Seminar is now in Hall A."
+              />
+            </div>
+            <div>
+              <label className="block text-[11px] font-bold uppercase text-[#606770] mb-1.5">Update Type</label>
+              <select 
+                value={updateType}
+                onChange={(e) => setUpdateType(e.target.value as EventUpdate['type'])}
+                className="w-full bg-[#F0F2F5] border border-[#E4E6EB] rounded px-4 py-2 text-[14px] outline-none focus:border-[#1976D2] transition-colors"
+              >
+                <option value="info">Info (Blue)</option>
+                <option value="warning">Warning (Orange)</option>
+                <option value="alert">Alert (Red)</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-[11px] font-bold uppercase text-[#606770] mb-1.5">Target Audience</label>
+              <select 
+                value={targetAudience}
+                onChange={(e) => setTargetAudience(e.target.value as EventUpdate['targetAudience'])}
+                className="w-full bg-[#F0F2F5] border border-[#E4E6EB] rounded px-4 py-2 text-[14px] outline-none focus:border-[#1976D2] transition-colors"
+              >
+                <option value="all">All Users</option>
+                <option value="student">Students Only</option>
+                <option value="parent">Parents Only</option>
+                <option value="recruiter">Recruiters Only</option>
+                <option value="admin">Admins Only</option>
+              </select>
+            </div>
+          </div>
+
+          <div className="pt-4 flex gap-4">
+            <button 
+              type="submit"
+              disabled={saving || !selectedEventId}
+              className="px-8 py-3 bg-[#1976D2] text-white font-bold rounded hover:bg-black transition-colors disabled:opacity-50 shadow-sm"
+            >
+              {saving ? 'Processing...' : 'Push Live Update'}
+            </button>
+          </div>
+        </form>
+
+        {/* Existing Updates List */}
+        {selectedEventId && updatesForSelectedEvent.length > 0 && (
+          <div className="mt-10 pt-8 border-t border-[#F0F2F5]">
+            <h4 className="text-[11px] font-bold uppercase text-[#606770] mb-4">Recent Updates for Selected Event</h4>
+            <div className="space-y-3">
+              {updatesForSelectedEvent.map(update => (
+                <div key={update.id} className="p-4 bg-[#F8F9FA] rounded-xl border border-[#E4E6EB] flex items-start gap-4">
+                   <div className="shrink-0 mt-0.5">
+                     {update.type === 'alert' && <AlertCircle className="w-4 h-4 text-[#D32F2F]" />}
+                     {update.type === 'warning' && <AlertTriangle className="w-4 h-4 text-[#F57F17]" />}
+                     {update.type === 'info' && <Info className="w-4 h-4 text-[#1976D2]" />}
+                   </div>
+                   <div className="flex-grow min-w-0">
+                     <div className="text-[13px] font-bold text-[#1C1E21] break-words">{update.message}</div>
+                     <div className="text-[10px] text-[#606770] font-bold uppercase tracking-wider mt-1 flex flex-wrap gap-2 items-center">
+                       <span>{format(new Date(update.createdAt), 'MMM d, h:mm a')}</span>
+                       {update.targetAudience && update.targetAudience !== 'all' && (
+                         <span className="bg-[#E4E6EB] px-1.5 py-0.5 rounded text-[#1C1E21]">
+                           Target: {update.targetAudience}
+                         </span>
+                       )}
+                     </div>
+                   </div>
+                   <div className="flex gap-1 shrink-0">
+                     <button onClick={() => setDeletingUpdateId(update.id)} className="p-1.5 text-[#606770] hover:text-[#D32F2F]"><Trash2 className="w-3.5 h-3.5" /></button>
+                   </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+
+      <AnimatePresence>
+        {deletingUpdateId && (
+          <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[100] flex items-center justify-center p-4 text-center">
+            <motion.div initial={{ scale: 0.9 }} animate={{ scale: 1 }} className="bg-white rounded-2xl p-8 max-w-sm w-full">
+              <Trash2 className="w-12 h-12 text-[#D32F2F] mx-auto mb-4" />
+              <h3 className="text-xl font-bold mb-2">Delete Update?</h3>
+              <p className="text-[14px] text-[#606770] mb-6">This will remove the update from the event.</p>
+              <div className="flex gap-3">
+                <button onClick={() => setDeletingUpdateId(null)} className="flex-grow py-3 bg-[#F0F2F5] rounded-xl font-bold">Cancel</button>
+                <button onClick={() => handleDeleteUpdate(deletingUpdateId)} className="flex-grow py-3 bg-[#D32F2F] text-white rounded-xl font-bold">Delete</button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
     </motion.div>
+  );
+};
+
+const SponsorSection = ({ sponsors, loading }: { sponsors: Sponsor[], loading: boolean }) => {
+  if (loading) return (
+    <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4 py-8">
+      {[1, 2, 3, 4].map(i => (
+        <div key={i} className="aspect-square bg-[#F0F2F5] rounded-xl animate-pulse" />
+      ))}
+    </div>
+  );
+
+  if (sponsors.length === 0) return null;
+
+  const tiers = {
+    platinum: sponsors.filter(s => s.tier === 'platinum'),
+    gold: sponsors.filter(s => s.tier === 'gold'),
+    silver: sponsors.filter(s => s.tier === 'silver'),
+    bronze: sponsors.filter(s => s.tier === 'bronze'),
+    exhibitor: sponsors.filter(s => s.tier === 'exhibitor'),
+  };
+
+  return (
+    <div className="space-y-8">
+      {tiers.platinum.length > 0 && (
+        <section>
+          <h4 className="text-[10px] font-bold uppercase text-[#D32F2F] tracking-[0.2em] text-center mb-6">Platinum Partners</h4>
+          <div className="flex flex-wrap justify-center gap-8">
+            {tiers.platinum.map(s => (
+              <a 
+                key={s.id} 
+                href={s.websiteUrl || '#'} 
+                target={s.websiteUrl ? "_blank" : undefined}
+                rel={s.websiteUrl ? "noopener noreferrer" : undefined}
+                className="group relative"
+              >
+                <div className="w-44 h-28 bg-white border-2 border-[#E4E6EB] hover:border-[#D32F2F] rounded-2xl p-5 transition-all flex items-center justify-center shadow-sm hover:shadow-xl hover:-translate-y-1">
+                  <img src={s.logoUrl} alt={s.name} className="max-w-full max-h-full object-contain filter grayscale group-hover:grayscale-0 transition-all" />
+                </div>
+                <div className="absolute -bottom-6 left-1/2 -translate-x-1/2 bg-white border border-[#E4E6EB] px-3 py-1.5 rounded-xl text-center whitespace-nowrap shadow-xl z-10 w-[120%] max-w-[180px]">
+                   <div className="text-[11px] font-black text-[#1C1E21] truncate">{s.name}</div>
+                   {s.websiteUrl && (
+                     <div className="text-[9px] text-[#1976D2] font-bold truncate mt-0.5">{s.websiteUrl.replace(/^https?:\/\/(www\.)?/, '')}</div>
+                   )}
+                </div>
+              </a>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {(tiers.gold.length > 0 || tiers.silver.length > 0 || tiers.bronze.length > 0) && (
+        <section>
+          <h4 className="text-[10px] font-bold uppercase text-[#606770] tracking-[0.2em] text-center mb-6">Featured Sponsors</h4>
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+            {[...tiers.gold, ...tiers.silver, ...tiers.bronze].map(s => (
+              <a 
+                key={s.id} 
+                href={s.websiteUrl || '#'} 
+                target={s.websiteUrl ? "_blank" : undefined}
+                rel={s.websiteUrl ? "noopener noreferrer" : undefined}
+                className="bg-white border border-[#E4E6EB] rounded-xl p-5 flex flex-col items-center justify-center gap-3 hover:shadow-lg transition-all group hover:-translate-y-1"
+              >
+                <div className="w-20 h-20 shrink-0 flex items-center justify-center group-hover:scale-110 transition-transform">
+                  <img src={s.logoUrl} alt={s.name} className="max-w-full max-h-full object-contain" />
+                </div>
+                <div className="text-center overflow-hidden w-full">
+                  <div className="text-[13px] font-bold text-[#1C1E21] truncate">{s.name}</div>
+                  <div className="text-[9px] font-bold text-[#606770] uppercase opacity-60 mb-1">{s.tier}</div>
+                  {s.websiteUrl && (
+                    <div className="text-[10px] text-[#1976D2] font-bold truncate">
+                      {s.websiteUrl.replace(/^https?:\/\/(www\.)?/, '')}
+                    </div>
+                  )}
+                </div>
+              </a>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {tiers.exhibitor.length > 0 && (
+        <section>
+          <h4 className="text-[10px] font-bold uppercase text-[#A0A0A0] tracking-[0.2em] text-center mb-4">Confirmed Exhibitors</h4>
+          <div className="flex flex-wrap justify-center gap-3">
+             {tiers.exhibitor.map(s => (
+               <a 
+                 key={s.id} 
+                 href={s.websiteUrl || '#'} 
+                 target={s.websiteUrl ? "_blank" : undefined}
+                 rel={s.websiteUrl ? "noopener noreferrer" : undefined}
+                 className="px-4 py-3 bg-[#F8F9FA] border border-[#E4E6EB] rounded-2xl flex flex-col items-center text-center hover:bg-white hover:border-[#1976D2] transition-all hover:shadow-md min-w-[120px]"
+               >
+                 <div className="w-6 h-6 rounded-md overflow-hidden shrink-0 bg-white mb-2 shadow-sm">
+                   <img src={s.logoUrl} alt="" className="w-full h-full object-contain" />
+                 </div>
+                 <div className="text-[11px] font-bold text-[#606770]">{s.name}</div>
+                 {s.websiteUrl && (
+                   <div className="text-[9px] text-[#1976D2] font-bold truncate max-w-[100px] mt-0.5">
+                     {s.websiteUrl.replace(/^https?:\/\/(www\.)?/, '')}
+                   </div>
+                 )}
+               </a>
+             ))}
+          </div>
+        </section>
+      )}
+    </div>
   );
 };
 
@@ -2153,20 +4374,27 @@ const LoadingScreen = () => (
   </div>
 );
 
-const ProfileCompletionPrompt = ({ onGoToSettings }: { onGoToSettings: () => void }) => {
+const ProfileCompletionPrompt = ({ onGoToSettings, onDismiss }: { onGoToSettings: () => void, onDismiss: () => void }) => {
   return (
     <motion.div 
       initial={{ opacity: 0, y: -20 }}
       animate={{ opacity: 1, y: 0 }}
-      className="bg-[#1976D2] text-white p-4 rounded-xl shadow-lg flex flex-col md:flex-row items-center justify-between gap-4 mb-6"
+      className="bg-[#1976D2] text-white p-4 rounded-xl shadow-lg flex flex-col md:flex-row items-center justify-between gap-4 relative pr-10"
     >
+      <button 
+        onClick={onDismiss}
+        className="absolute top-2 right-2 p-1.5 bg-white/10 hover:bg-white/20 rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-white/50"
+        aria-label="Dismiss prompt"
+      >
+        <X className="w-4 h-4 text-white" />
+      </button>
       <div className="flex items-center gap-4">
         <div className="bg-white/20 p-2 rounded-full">
           <GraduationCap className="w-6 h-6 text-white" />
         </div>
         <div>
           <h4 className="font-bold text-[15px]">Complete Your Student Profile</h4>
-          <p className="text-[12px] opacity-90">Please add your school, major, and graduation year to unlock personalized recommendations.</p>
+          <p className="text-[12px] opacity-90">Please add your school and interests to unlock personalized scholarship recommendations.</p>
         </div>
       </div>
       <button 
@@ -2190,6 +4418,7 @@ const UserRoleSelector = ({ onSelect }: { onSelect: (role: Role) => void }) => {
         {[
           { icon: GraduationCap, role: 'student', title: 'Student', desc: 'Find colleges, scholarships, and resources for your future.' },
           { icon: Users, role: 'parent', title: 'Parent', desc: 'Support your child’s educational journey with expert advice.' },
+          { icon: Briefcase, role: 'recruiter', title: 'Recruiter', desc: 'Capture leads and connect with talent at the expo.' },
           { icon: CreditCard, role: 'admin', title: 'Administrator', desc: 'Manage events, vendors, and attendee data.' }
         ].map((item) => (
           <motion.button
@@ -2478,15 +4707,59 @@ const NotificationBroadcaster = () => {
 const ScholarshipTracker = () => {
   const { user } = useContext(UserContext);
   const [apps, setApps] = useState<ScholarshipApplication[]>([
-    { id: '1', name: 'NCRF STEM Scholarship', provider: 'NCRF Foundation', amount: 5000, deadline: '2026-11-15', status: 'pending' },
-    { id: '2', name: 'Future Leaders Grant', provider: 'Community Trust', amount: 2500, deadline: '2026-12-01', status: 'draft' },
-    { id: '3', name: 'Academic Excellence Award', provider: 'City Council', amount: 1000, deadline: '2026-04-10', status: 'awarded' },
+    { 
+      id: '1', 
+      name: 'NCRF STEM Scholarship', 
+      provider: 'NCRF Foundation', 
+      amount: 5000, 
+      deadline: '2026-11-15', 
+      status: 'pending',
+      essay: 'My passion for STEM began in middle school when I first learned about robotics...',
+      documents: [
+        { name: 'Transcript_Official.pdf', url: '#', type: 'PDF' },
+        { name: 'Recommendation_Letter_Smith.pdf', url: '#', type: 'PDF' }
+      ]
+    },
+    { 
+      id: '2', 
+      name: 'Future Leaders Grant', 
+      provider: 'Community Trust', 
+      amount: 2500, 
+      deadline: '2026-12-01', 
+      status: 'draft',
+      notes: 'Need to finish the community service section.'
+    },
+    { 
+      id: '3', 
+      name: 'Academic Excellence Award', 
+      provider: 'City Council', 
+      amount: 1000, 
+      deadline: '2026-04-10', 
+      status: 'awarded' 
+    },
   ]);
+
+  const [selectedApp, setSelectedApp] = useState<ScholarshipApplication | null>(null);
+  const [isEditing, setIsEditing] = useState(false);
+  const [editForm, setEditForm] = useState<Partial<ScholarshipApplication>>({});
 
   const stats = {
     totalAwarded: apps.filter(a => a.status === 'awarded').reduce((acc, curr) => acc + curr.amount, 0),
     pendingAmount: apps.filter(a => a.status === 'pending').reduce((acc, curr) => acc + curr.amount, 0),
     upcomingDeadlines: apps.filter(a => (a.status === 'draft' || a.status === 'pending') && new Date(a.deadline) > new Date()).length
+  };
+
+  const handleEditClick = (app: ScholarshipApplication) => {
+    setSelectedApp(app);
+    setEditForm(app);
+    setIsEditing(true);
+  };
+
+  const handleSave = () => {
+    if (!selectedApp) return;
+    setApps(apps.map(a => a.id === selectedApp.id ? { ...a, ...editForm } as ScholarshipApplication : a));
+    setIsEditing(false);
+    setSelectedApp(null);
   };
 
   if (user?.role !== 'student') return null;
@@ -2552,7 +4825,9 @@ const ScholarshipTracker = () => {
               {apps.map((app) => (
                 <tr key={app.id} className="hover:bg-[#F8F9FA]/50 transition-colors group">
                   <td className="px-6 py-5">
-                    <div className="text-[14px] font-bold text-[#1C1E21] group-hover:text-[#1976D2] transition-colors">{app.name}</div>
+                    <div className="text-[14px] font-bold text-[#1C1E21] group-hover:text-[#1976D2] transition-colors cursor-pointer" onClick={() => handleEditClick(app)}>
+                      {app.name}
+                    </div>
                   </td>
                   <td className="px-6 py-5 text-[13px] text-[#606770] font-medium">{app.provider}</td>
                   <td className="px-6 py-5">
@@ -2579,7 +4854,10 @@ const ScholarshipTracker = () => {
                   </td>
                   <td className="px-6 py-5 text-right">
                     <div className="flex justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                      <button className="p-2 hover:bg-[#E4E6EB] rounded-lg text-[#606770] transition-colors">
+                      <button 
+                        onClick={() => handleEditClick(app)}
+                        className="p-2 hover:bg-[#E4E6EB] rounded-lg text-[#606770] transition-colors"
+                      >
                         <Edit2 className="w-4 h-4" />
                       </button>
                       <button className="p-2 hover:bg-red-50 rounded-lg text-red-500 transition-colors">
@@ -2598,6 +4876,151 @@ const ScholarshipTracker = () => {
            </button>
         </div>
       </div>
+
+      {/* Detailed Edit View / Modal */}
+      <AnimatePresence>
+        {isEditing && (
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[120] flex items-center justify-center p-4">
+            <motion.div 
+              initial={{ scale: 0.95, opacity: 0, y: 20 }}
+              animate={{ scale: 1, opacity: 1, y: 0 }}
+              exit={{ scale: 0.95, opacity: 0, y: 20 }}
+              className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl max-h-[90vh] overflow-hidden flex flex-col"
+            >
+              <div className="p-6 border-b border-[#F0F2F5] flex items-center justify-between">
+                <div>
+                  <h3 className="text-xl font-black text-[#1C1E21]">{editForm.name} Details</h3>
+                  <p className="text-[12px] text-[#606770] font-bold uppercase tracking-widest">Application Management</p>
+                </div>
+                <button onClick={() => setIsEditing(false)} className="p-2 hover:bg-[#F0F2F5] rounded-full transition-colors">
+                  <X className="w-6 h-6 text-[#606770]" />
+                </button>
+              </div>
+
+              <div className="flex-grow overflow-y-auto p-8 custom-scrollbar">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                  {/* Left Column: Basic Info */}
+                  <div className="space-y-6">
+                    <div className="bg-[#F8F9FA] p-6 rounded-2xl border border-[#E4E6EB]">
+                      <h4 className="text-[10px] font-bold uppercase text-[#D32F2F] tracking-[0.2em] mb-4">Core Information</h4>
+                      <div className="space-y-4">
+                        <div>
+                          <label className="block text-[11px] font-bold uppercase text-[#606770] mb-1.5">Scholarship Name</label>
+                          <input 
+                            type="text" 
+                            value={editForm.name} 
+                            onChange={(e) => setEditForm(prev => ({ ...prev, name: e.target.value }))}
+                            className="w-full bg-white border border-[#E4E6EB] rounded-xl px-4 py-2.5 text-[14px] outline-none focus:border-[#1976D2] font-semibold"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[11px] font-bold uppercase text-[#606770] mb-1.5">Provider</label>
+                          <input 
+                            type="text" 
+                            value={editForm.provider} 
+                            onChange={(e) => setEditForm(prev => ({ ...prev, provider: e.target.value }))}
+                            className="w-full bg-white border border-[#E4E6EB] rounded-xl px-4 py-2.5 text-[14px] outline-none focus:border-[#1976D2] font-semibold"
+                          />
+                        </div>
+                        <div className="grid grid-cols-2 gap-4">
+                          <div>
+                            <label className="block text-[11px] font-bold uppercase text-[#606770] mb-1.5">Amount ($)</label>
+                            <input 
+                              type="number" 
+                              value={editForm.amount} 
+                              onChange={(e) => setEditForm(prev => ({ ...prev, amount: Number(e.target.value) }))}
+                              className="w-full bg-white border border-[#E4E6EB] rounded-xl px-4 py-2.5 text-[14px] outline-none focus:border-[#1976D2] font-semibold"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-[11px] font-bold uppercase text-[#606770] mb-1.5">Status</label>
+                            <select 
+                              value={editForm.status} 
+                              onChange={(e) => setEditForm(prev => ({ ...prev, status: e.target.value as any }))}
+                              className="w-full bg-white border border-[#E4E6EB] rounded-xl px-4 py-2.5 text-[14px] outline-none focus:border-[#1976D2] font-semibold"
+                            >
+                              <option value="draft">Draft</option>
+                              <option value="pending">Pending</option>
+                              <option value="awarded">Awarded</option>
+                              <option value="rejected">Rejected</option>
+                            </select>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="bg-[#F8F9FA] p-6 rounded-2xl border border-[#E4E6EB]">
+                      <h4 className="text-[10px] font-bold uppercase text-[#D32F2F] tracking-[0.2em] mb-4">Supporting Documents</h4>
+                      <div className="space-y-3">
+                        {editForm.documents?.map((doc, idx) => (
+                          <div key={idx} className="flex items-center justify-between p-3 bg-white border border-[#E4E6EB] rounded-xl group">
+                            <div className="flex items-center gap-3">
+                              <div className="p-2 bg-red-50 text-[#D32F2F] rounded-lg">
+                                <Download className="w-4 h-4" />
+                              </div>
+                              <span className="text-[13px] font-bold text-[#1C1E21]">{doc.name}</span>
+                            </div>
+                            <button className="text-[#606770] hover:text-[#D32F2F] transition-colors p-1 opacity-0 group-hover:opacity-100">
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </div>
+                        ))}
+                        <button className="w-full py-4 border-2 border-dashed border-[#CCC] rounded-2xl text-[12px] font-bold text-[#606770] hover:border-[#1976D2] hover:text-[#1976D2] transition-all flex flex-col items-center justify-center gap-2 mt-4">
+                           <Plus className="w-5 h-5" />
+                           Drop files or click to upload
+                           <span className="text-[9px] font-medium opacity-60">Transcripts, Recommendation Letters, etc.</span>
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Right Column: Essays & Notes */}
+                  <div className="space-y-6">
+                    <div className="bg-[#F8F9FA] p-6 rounded-2xl border border-[#E4E6EB] h-[340px] flex flex-col">
+                      <div className="flex items-center justify-between mb-4">
+                        <h4 className="text-[10px] font-bold uppercase text-[#D32F2F] tracking-[0.2em]">Application Essay</h4>
+                        <span className="text-[10px] font-mono font-bold text-[#606770]">Word Count: {editForm.essay?.split(/\s+/).filter(x => x).length || 0}</span>
+                      </div>
+                      <textarea 
+                        value={editForm.essay} 
+                        onChange={(e) => setEditForm(prev => ({ ...prev, essay: e.target.value }))}
+                        placeholder="Paste your essay here for storage and quick editing..."
+                        className="flex-grow w-full bg-white border border-[#E4E6EB] rounded-2xl p-5 text-[14px] leading-relaxed outline-none focus:border-[#1976D2] resize-none font-medium custom-scrollbar"
+                      />
+                    </div>
+
+                    <div className="bg-[#F8F9FA] p-6 rounded-2xl border border-[#E4E6EB]">
+                      <h4 className="text-[10px] font-bold uppercase text-[#D32F2F] tracking-[0.2em] mb-4">Additional Notes</h4>
+                      <textarea 
+                        value={editForm.notes} 
+                        onChange={(e) => setEditForm(prev => ({ ...prev, notes: e.target.value }))}
+                        placeholder="Internal reminders, follow-up dates, or requirements..."
+                        rows={4}
+                        className="w-full bg-white border border-[#E4E6EB] rounded-2xl p-4 text-[14px] outline-none focus:border-[#1976D2] resize-none font-medium"
+                      />
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="p-6 border-t border-[#F0F2F5] bg-[#F8F9FA] flex items-center justify-end gap-3">
+                <button 
+                  onClick={() => setIsEditing(false)}
+                  className="px-6 py-2.5 text-[13px] font-black uppercase tracking-widest text-[#606770] hover:text-[#1C1E21]"
+                >
+                  Discard Changes
+                </button>
+                <button 
+                  onClick={handleSave}
+                  className="px-8 py-2.5 bg-[#1A2233] text-white text-[13px] font-black uppercase tracking-widest rounded-xl hover:bg-black transition-all shadow-lg active:scale-95"
+                >
+                  Save Application
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
     </div>
   );
 };
@@ -2608,19 +5031,19 @@ const Navbar = ({ onOpenNotifications }: { onOpenNotifications: () => void }) =>
 
   return (
     <header className="h-[70px] bg-white border border-[#E4E6EB] rounded-lg flex items-center justify-between px-5 mb-4 shadow-sm">
-      <div className="flex items-center gap-4">
+      <div className="flex items-center gap-3">
         <img 
           src={LOGO_URL} 
           alt="NCRF Logo" 
-          className="h-10 w-auto" 
+          className="h-12 w-auto" 
           referrerPolicy="no-referrer"
         />
-        <div className="hidden md:block">
-          <div className="font-black text-lg text-[#D32F2F] tracking-tighter uppercase">
-            NCRF Foundation
+        <div className="hidden sm:block">
+          <div className="text-[10px] font-bold text-[#606770] uppercase tracking-[0.2em] leading-none mb-1">
+            Official Portal
           </div>
-          <div className="text-[10px] font-bold text-[#606770] uppercase tracking-widest -mt-1">
-            Los Angeles Expo 2026
+          <div className="text-[10px] font-bold text-[#D32F2F] uppercase tracking-widest">
+            Expo 2026
           </div>
         </div>
       </div>
@@ -2847,72 +5270,300 @@ const BoothMap = () => {
   );
 };
 
-const DateCard: React.FC<{ month: string, day: string, city: string, active?: boolean, isSaved?: boolean, onClick?: () => void }> = ({ month, day, city, active, isSaved, onClick }) => (
+const DateCard: React.FC<{ month: string, day: string, city: string, active?: boolean, onClick?: () => void }> = ({ month, day, city, active, onClick }) => (
   <div 
     onClick={onClick}
     className={cn(
-      "min-w-[140px] border border-[#E4E6EB] rounded-lg p-3 flex flex-col items-center transition-all cursor-pointer hover:shadow-md relative",
+      "min-w-[140px] border border-[#E4E6EB] rounded-lg p-3 flex flex-col items-center transition-all cursor-pointer hover:shadow-md",
       active ? "border-[#D32F2F] bg-[#FFF5F5]" : "bg-white"
     )}
   >
-    {isSaved && (
-      <div className="absolute top-2 right-2 flex items-center justify-center">
-        <Bookmark className="w-3.5 h-3.5 fill-[#1976D2] text-[#1976D2]" />
-      </div>
-    )}
     <span className="text-[10px] uppercase font-bold text-[#606770]">{month}</span>
     <span className="text-2xl font-extrabold my-1">{day}</span>
     <span className="text-[12px] font-semibold">{city}</span>
   </div>
 );
 
-const Dashboard = ({ events, onSelectEvent }: { events: ExpoEvent[], onSelectEvent: (event: ExpoEvent) => void }) => {
-  const { user } = useContext(UserContext);
-  const [activeFilter, setActiveFilter] = useState<'all' | 'saved'>('all');
-
-  if (!user) return null;
-
-  const displayEvents = activeFilter === 'all' 
-    ? events 
-    : events.filter(e => user.savedEvents?.includes(e.id));
-
+const StudentPortal = ({ user, setActiveView }: { user: AppUser, setActiveView: (view: any) => void }) => {
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-[1fr_300px] gap-4">
-      {/* Filters Overlay/Row */}
-      <div className="lg:col-span-2 flex items-center justify-between bg-white p-3 border border-[#E4E6EB] rounded-lg shadow-sm">
-        <div className="flex gap-2">
-          {[
-            { id: 'all', label: 'All Expos', icon: Calendar },
-            { id: 'saved', label: 'My Saved', icon: Bookmark }
-          ].map((tab) => (
-            <button
-              key={tab.id}
-              onClick={() => setActiveFilter(tab.id as any)}
-              className={cn(
-                "px-4 py-1.5 rounded-lg text-[11px] font-bold uppercase tracking-wider transition-all flex items-center gap-2",
-                activeFilter === tab.id 
-                  ? "bg-[#1976D2] text-white shadow-md shadow-[#1976D2]/20" 
-                  : "text-[#606770] hover:bg-[#F0F2F5] hover:text-[#1C1E21]"
-              )}
-            >
-              <tab.icon className="w-3.5 h-3.5" />
-              {tab.label}
-              {tab.id === 'saved' && user.savedEvents && user.savedEvents.length > 0 && (
-                <span className={cn(
-                  "ml-1 px-1.5 py-0.5 rounded-full text-[9px] font-black",
-                  activeFilter === 'saved' ? "bg-white text-[#1976D2]" : "bg-[#1976D2] text-white"
-                )}>
-                  {user.savedEvents.length}
-                </span>
-              )}
-            </button>
-          ))}
+    <div className="max-w-6xl mx-auto py-6 space-y-6">
+      <div className="bg-[#1976D2] rounded-3xl p-8 text-white flex flex-col md:flex-row items-center justify-between gap-6 shadow-xl relative overflow-hidden">
+        <div className="absolute inset-0 bg-[url('https://www.transparenttextures.com/patterns/cubes.png')] opacity-10"></div>
+        <div className="relative z-10 w-full md:w-auto">
+           <h1 className="text-4xl font-black mb-2 tracking-tight">Welcome, {user.displayName.split(' ')[0]}!</h1>
+           <p className="text-white/80 font-medium text-lg leading-snug max-w-xl">
+             Your NCRF Expo journey starts here. Access your digital ID, connect with recruiters, and find your dream college.
+           </p>
         </div>
-        <div className="text-[11px] font-bold text-[#606770] italic hidden sm:block">
-          {activeFilter === 'all' ? 'Browse all upcoming college fairs' : 'View events you have bookmarked'}
+        <div className="relative z-10 shrink-0 bg-white/10 backdrop-blur-md p-4 rounded-xl border border-white/20 text-center w-full md:w-auto">
+          <div className="text-[11px] uppercase tracking-widest font-bold opacity-80 mb-1">Student Status</div>
+          <div className="text-xl font-black flex items-center justify-center gap-2">
+            <span className="w-3 h-3 bg-green-400 rounded-full animate-pulse shadow-[0_0_10px_rgba(7ade80,0.5)]"></span>
+            Registered
+          </div>
         </div>
       </div>
 
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
+        <div className="lg:col-span-4 space-y-6">
+          <div className="bg-white rounded-2xl border border-[#E4E6EB] shadow-sm p-6">
+            <h2 className="text-lg font-black text-[#1C1E21] tracking-tight mb-4 flex items-center justify-between">
+              Your Digital ID
+              <span className="bg-[#E8F5E9] text-[#2E7D32] px-2 py-0.5 rounded text-[10px] font-bold uppercase">Active</span>
+            </h2>
+            <StudentDigitalCard user={user} />
+          </div>
+        </div>
+
+        <div className="lg:col-span-8 space-y-6">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div 
+              onClick={() => setActiveView('scholarship')}
+              className="bg-white rounded-2xl border border-[#E4E6EB] p-6 hover:shadow-lg hover:border-[#D32F2F] transition-all cursor-pointer group flex flex-col items-start h-full"
+            >
+              <div className="w-12 h-12 bg-[#FFF5F5] rounded-xl flex items-center justify-center mb-4 group-hover:scale-110 transition-transform">
+                <FileText className="w-6 h-6 text-[#D32F2F]" />
+              </div>
+              <h3 className="text-lg font-black text-[#1C1E21] mb-2 group-hover:text-[#D32F2F] transition-colors">Scholarship Center</h3>
+              <p className="text-[13px] text-[#606770] leading-relaxed mb-4 flex-grow">Track your scholarship applications and discover financial aid opportunities tailored for you.</p>
+              <div className="mt-auto flex items-center gap-2 text-[12px] font-bold text-[#D32F2F] uppercase tracking-wider">
+                Explore <ChevronRight className="w-4 h-4" />
+              </div>
+            </div>
+
+            <div 
+              onClick={() => setActiveView('workshops')}
+              className="bg-white rounded-2xl border border-[#E4E6EB] p-6 hover:shadow-lg hover:border-[#1976D2] transition-all cursor-pointer group flex flex-col items-start h-full"
+            >
+              <div className="w-12 h-12 bg-[#E3F2FD] rounded-xl flex items-center justify-center mb-4 group-hover:scale-110 transition-transform">
+                <Clock className="w-6 h-6 text-[#1976D2]" />
+              </div>
+              <h3 className="text-lg font-black text-[#1C1E21] mb-2 group-hover:text-[#1976D2] transition-colors">Workshop Schedule</h3>
+              <p className="text-[13px] text-[#606770] leading-relaxed mb-4 flex-grow">Plan your day. See upcoming seminars, HBCU panels, and expert-led sessions.</p>
+              <div className="mt-auto flex items-center gap-2 text-[12px] font-bold text-[#1976D2] uppercase tracking-wider">
+                View Schedule <ChevronRight className="w-4 h-4" />
+              </div>
+            </div>
+
+            <div 
+              onClick={() => setActiveView('floorplan')}
+              className="bg-white rounded-2xl border border-[#E4E6EB] p-6 hover:shadow-lg hover:border-[#1C1E21] transition-all cursor-pointer group flex flex-col items-start h-full"
+            >
+              <div className="w-12 h-12 bg-[#F0F2F5] rounded-xl flex items-center justify-center mb-4 group-hover:scale-110 transition-transform">
+                <MapPin className="w-6 h-6 text-[#1C1E21]" />
+              </div>
+              <h3 className="text-lg font-black text-[#1C1E21] mb-2 group-hover:text-[#1C1E21] transition-colors">Interactive Map</h3>
+              <p className="text-[13px] text-[#606770] leading-relaxed mb-4 flex-grow">Find your way around the expo floor. Locate college booths and resources.</p>
+              <div className="mt-auto flex items-center gap-2 text-[12px] font-bold text-[#1C1E21] uppercase tracking-wider">
+                Open Map <ChevronRight className="w-4 h-4" />
+              </div>
+            </div>
+
+            <div 
+              onClick={() => setActiveView('settings')}
+              className="bg-white rounded-2xl border border-[#E4E6EB] p-6 hover:shadow-lg hover:border-gray-500 transition-all cursor-pointer group flex flex-col items-start h-full"
+            >
+              <div className="w-12 h-12 bg-gray-100 rounded-xl flex items-center justify-center mb-4 group-hover:scale-110 transition-transform">
+                <Settings className="w-6 h-6 text-gray-700" />
+              </div>
+              <h3 className="text-lg font-black text-[#1C1E21] mb-2">Profile Settings</h3>
+              <p className="text-[13px] text-[#606770] leading-relaxed mb-4 flex-grow">Keep your information up to date to ensure recruiters have your latest details.</p>
+              <div className="mt-auto flex items-center gap-2 text-[12px] font-bold text-gray-700 uppercase tracking-wider">
+                Edit Profile <ChevronRight className="w-4 h-4" />
+              </div>
+            </div>
+          </div>
+
+          <div className="bg-white rounded-2xl border border-[#E4E6EB] shadow-sm p-6 overflow-hidden relative">
+            <div className="absolute top-0 right-0 w-32 h-32 bg-[#FFF5F5] rounded-bl-full -z-0"></div>
+            <div className="relative z-10 flex flex-col md:flex-row items-center gap-6">
+              <div className="w-16 h-16 bg-[#D32F2F] rounded-2xl flex items-center justify-center shrink-0 shadow-lg text-white font-black text-xl">
+                 <Camera className="w-8 h-8" />
+              </div>
+              <div>
+                <h3 className="text-xl font-black text-[#1C1E21] mb-1">Make an Impression</h3>
+                <p className="text-[#606770] text-[14px]">Update your profile with a professional photo and double-check your major/graduation year. This is the information recruiters will see when you scan your card.</p>
+              </div>
+              <button 
+                onClick={() => setActiveView('settings')}
+                className="shrink-0 px-6 py-3 bg-[#1C1E21] text-white font-bold rounded-xl hover:bg-[#D32F2F] transition-colors shadow-md"
+              >
+                Update Now
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const Dashboard = ({ events, onSelectEvent, setActiveView }: { events: ExpoEvent[], onSelectEvent: (event: ExpoEvent) => void, setActiveView: (view: string) => void }) => {
+  const { user } = useContext(UserContext);
+  const [globalUpdates, setGlobalUpdates] = useState<(EventUpdate & { eventName: string })[]>([]);
+
+  useEffect(() => {
+    if (events.length === 0) return;
+
+    // To avoid complex indexes, we can just attach listeners to the visible events
+    const unsubscribes = events.map(event => {
+      const q = query(collection(db, 'events', event.id, 'updates'), orderBy('createdAt', 'desc'));
+      return onSnapshot(q, (snapshot) => {
+        setGlobalUpdates(prev => {
+          // Remove old updates for this event
+          let next = prev.filter(u => u.eventId !== event.id);
+          // Add new updates
+          const fetched = snapshot.docs.map(doc => ({ id: doc.id, eventName: event.name, ...doc.data() } as EventUpdate & { eventName: string }))
+            .filter(u => !u.targetAudience || u.targetAudience === 'all' || u.targetAudience === user?.role);
+          next = [...next, ...fetched];
+          // Re-sort
+          next.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+          return next;
+        });
+      });
+    });
+
+    return () => {
+      unsubscribes.forEach(unsub => unsub());
+    };
+  }, [events]);
+
+  if (!user) return null;
+
+  return (
+    <div className="space-y-4">
+      {globalUpdates.length > 0 && (
+         <div className="bg-[#E3F2FD] border border-[#BBDEFB] rounded-lg p-4 flex gap-3 overflow-x-auto custom-scrollbar">
+           <div className="shrink-0 flex items-center justify-center p-2 rounded-full bg-white text-[#1976D2] self-center">
+             <Bell className="w-5 h-5" />
+           </div>
+           <div className="flex gap-4 items-center whitespace-nowrap overflow-x-auto">
+             {globalUpdates.slice(0, 5).map(update => (
+               <div 
+                 key={update.id} 
+                 className={cn(
+                   "inline-flex items-center gap-2 px-4 py-2 border rounded-full text-[13px] font-bold cursor-pointer transition-transform hover:scale-105",
+                   update.type === 'alert' ? "bg-white border-[#FFCDD2] text-[#B71C1C]" :
+                   update.type === 'warning' ? "bg-white border-[#FFECB3] text-[#F57F17]" :
+                   "bg-white border-[#BBDEFB] text-[#0D47A1]"
+                 )}
+                 onClick={() => {
+                   const ev = events.find(e => e.id === update.eventId);
+                   if (ev) onSelectEvent(ev);
+                 }}
+               >
+                 {update.type === 'alert' && <AlertCircle className="w-4 h-4 shrink-0" />}
+                 {update.type === 'warning' && <AlertTriangle className="w-4 h-4 shrink-0" />}
+                 {update.type === 'info' && <Info className="w-4 h-4 shrink-0" />}
+                 <span><span className="opacity-70 font-medium">{update.eventName}:</span> {update.message}</span>
+               </div>
+             ))}
+           </div>
+         </div>
+      )}
+
+      {/* Role Specific Highlight Cards */}
+      {user.role === 'student' && (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mb-4">
+          <div onClick={() => setActiveView('digital-card')} className="bg-gradient-to-br from-[#1976D2] to-[#1565C0] rounded-lg p-5 text-white cursor-pointer hover:shadow-lg transition-all group relative overflow-hidden">
+             <div className="absolute top-0 right-0 -mr-4 -mt-4 opacity-10 group-hover:scale-110 transition-transform"><QrCode className="w-24 h-24" /></div>
+             <h3 className="text-xl font-bold tracking-tight mb-1">My Digital ID</h3>
+             <p className="text-white/80 text-[13px] mb-4">Your scanner code for recruiters.</p>
+             <div className="flex items-center gap-2 text-sm font-bold bg-white/20 w-max px-3 py-1.5 rounded-md"><QrCode className="w-4 h-4"/> Show Code</div>
+          </div>
+          
+          <div onClick={() => setActiveView('scholarship')} className="bg-[#FFF5F5] border border-[#FFCDD2] rounded-lg p-5 cursor-pointer hover:shadow-md transition-all group relative overflow-hidden">
+             <div className="absolute top-0 right-0 -mr-4 -mt-4 opacity-5 group-hover:scale-110 transition-transform"><GraduationCap className="w-24 h-24 text-[#D32F2F]" /></div>
+             <div className="w-10 h-10 bg-white rounded-full flex items-center justify-center text-[#D32F2F] shadow-sm mb-3 group-hover:scale-110 transition-transform"><GraduationCap className="w-5 h-5" /></div>
+             <h3 className="text-lg font-bold text-[#1C1E21] mb-1">Scholarship Path</h3>
+             <p className="text-[#606770] text-[13px]">Track your matched scholarships.</p>
+          </div>
+
+          <div onClick={() => setActiveView('workshops')} className="bg-[#F8F9FA] border border-[#E4E6EB] rounded-lg p-5 cursor-pointer hover:shadow-md transition-all group relative overflow-hidden">
+             <div className="absolute top-0 right-0 -mr-4 -mt-4 opacity-5 group-hover:scale-110 transition-transform"><Clock className="w-24 h-24 text-[#1C1E21]" /></div>
+             <div className="w-10 h-10 bg-white rounded-full flex items-center justify-center text-[#1C1E21] shadow-sm mb-3 group-hover:scale-110 transition-transform"><Clock className="w-5 h-5" /></div>
+             <h3 className="text-lg font-bold text-[#1C1E21] mb-1">Workshops</h3>
+             <p className="text-[#606770] text-[13px]">Plan your learning schedule.</p>
+          </div>
+        </div>
+      )}
+
+      {user.role === 'recruiter' && (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mb-4">
+          <div onClick={() => setActiveView('lead-capture')} className="bg-gradient-to-br from-[#D32F2F] to-[#B71C1C] rounded-lg p-5 text-white cursor-pointer hover:shadow-lg transition-all group relative overflow-hidden">
+             <div className="absolute top-0 right-0 -mr-4 -mt-4 opacity-10 group-hover:scale-110 transition-transform"><ScanLine className="w-24 h-24" /></div>
+             <h3 className="text-xl font-bold tracking-tight mb-1">Capture Leads</h3>
+             <p className="text-white/80 text-[13px] mb-4">Scan student QR codes instantly.</p>
+             <div className="flex items-center gap-2 text-sm font-bold bg-white/20 w-max px-3 py-1.5 rounded-md"><ScanLine className="w-4 h-4"/> Open Scanner</div>
+          </div>
+
+          <div onClick={() => setActiveView('leads')} className="bg-[#E3F2FD] border border-[#BBDEFB] rounded-lg p-5 cursor-pointer hover:shadow-md transition-all group relative overflow-hidden">
+             <div className="absolute top-0 right-0 -mr-4 -mt-4 opacity-5 group-hover:scale-110 transition-transform"><Users className="w-24 h-24 text-[#1976D2]" /></div>
+             <div className="w-10 h-10 bg-white rounded-full flex items-center justify-center text-[#1976D2] shadow-sm mb-3 group-hover:scale-110 transition-transform"><Users className="w-5 h-5" /></div>
+             <h3 className="text-lg font-bold text-[#1C1E21] mb-1">My Leads DB</h3>
+             <p className="text-[#606770] text-[13px]">Review and export captured students.</p>
+          </div>
+          
+          <div onClick={() => setActiveView('floorplan')} className="bg-[#F8F9FA] border border-[#E4E6EB] rounded-lg p-5 cursor-pointer hover:shadow-md transition-all group relative overflow-hidden">
+             <div className="absolute top-0 right-0 -mr-4 -mt-4 opacity-5 group-hover:scale-110 transition-transform"><MapPin className="w-24 h-24 text-[#1C1E21]" /></div>
+             <div className="w-10 h-10 bg-white rounded-full flex items-center justify-center text-[#1C1E21] shadow-sm mb-3 group-hover:scale-110 transition-transform"><MapPin className="w-5 h-5" /></div>
+             <h3 className="text-lg font-bold text-[#1C1E21] mb-1">Booth Map</h3>
+             <p className="text-[#606770] text-[13px]">Locate your booth and scout the floor.</p>
+          </div>
+        </div>
+      )}
+
+      {user.role === 'parent' && (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mb-4">
+          <div onClick={() => setActiveView('resources')} className="bg-gradient-to-br from-[#1A2233] to-[#121826] rounded-lg p-5 text-white cursor-pointer hover:shadow-lg transition-all group relative overflow-hidden">
+             <div className="absolute top-0 right-0 -mr-4 -mt-4 opacity-10 group-hover:scale-110 transition-transform"><Info className="w-24 h-24" /></div>
+             <h3 className="text-xl font-bold tracking-tight mb-1">Guidance Resources</h3>
+             <p className="text-white/80 text-[13px] mb-4">Exclusive webinars & checklists.</p>
+             <div className="flex items-center gap-2 text-sm font-bold bg-white/20 w-max px-3 py-1.5 rounded-md"><Info className="w-4 h-4"/> View Library</div>
+          </div>
+          
+          <div onClick={() => setActiveView('workshops')} className="bg-[#F8F9FA] border border-[#E4E6EB] rounded-lg p-5 cursor-pointer hover:shadow-md transition-all group relative overflow-hidden">
+             <div className="absolute top-0 right-0 -mr-4 -mt-4 opacity-5 group-hover:scale-110 transition-transform"><Clock className="w-24 h-24 text-[#1C1E21]" /></div>
+             <div className="w-10 h-10 bg-white rounded-full flex items-center justify-center text-[#1C1E21] shadow-sm mb-3 group-hover:scale-110 transition-transform"><Clock className="w-5 h-5" /></div>
+             <h3 className="text-lg font-bold text-[#1C1E21] mb-1">Seminars & Panels</h3>
+             <p className="text-[#606770] text-[13px]">Schedule for parents and guardians.</p>
+          </div>
+          
+          <div onClick={() => setActiveView('floorplan')} className="bg-[#FFF5F5] border border-[#FFCDD2] rounded-lg p-5 cursor-pointer hover:shadow-md transition-all group relative overflow-hidden">
+             <div className="absolute top-0 right-0 -mr-4 -mt-4 opacity-5 group-hover:scale-110 transition-transform"><MapPin className="w-24 h-24 text-[#D32F2F]" /></div>
+             <div className="w-10 h-10 bg-white rounded-full flex items-center justify-center text-[#D32F2F] shadow-sm mb-3 group-hover:scale-110 transition-transform"><MapPin className="w-5 h-5" /></div>
+             <h3 className="text-lg font-bold text-[#1C1E21] mb-1">Expo Floor</h3>
+             <p className="text-[#606770] text-[13px]">Find colleges and support services.</p>
+          </div>
+        </div>
+      )}
+
+      {user.role === 'admin' && (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mb-4">
+          <div onClick={() => setActiveView('management')} className="bg-[#1C1E21] rounded-lg p-5 text-white cursor-pointer hover:shadow-lg transition-all group relative overflow-hidden">
+             <div className="absolute top-0 right-0 -mr-4 -mt-4 opacity-10 group-hover:scale-110 transition-transform"><Calendar className="w-24 h-24" /></div>
+             <h3 className="text-xl font-bold tracking-tight mb-1">Event Management</h3>
+             <p className="text-white/80 text-[13px] mb-4">Create and update Expo events.</p>
+             <div className="flex items-center gap-2 text-sm font-bold bg-white/20 w-max px-3 py-1.5 rounded-md"><Calendar className="w-4 h-4"/> Manage Events</div>
+          </div>
+
+          <div onClick={() => setActiveView('broadcast')} className="bg-[#D32F2F] rounded-lg p-5 text-white cursor-pointer hover:shadow-lg transition-all group relative overflow-hidden">
+             <div className="absolute top-0 right-0 -mr-4 -mt-4 opacity-10 group-hover:scale-110 transition-transform"><Bell className="w-24 h-24" /></div>
+             <h3 className="text-xl font-bold tracking-tight mb-1">Broadcast Hub</h3>
+             <p className="text-white/80 text-[13px] mb-4">Send announcements and alerts.</p>
+             <div className="flex items-center gap-2 text-sm font-bold bg-white/20 w-max px-3 py-1.5 rounded-md"><Bell className="w-4 h-4"/> Send Alert</div>
+          </div>
+          
+          <div onClick={() => setActiveView('leads')} className="bg-[#E3F2FD] border border-[#BBDEFB] rounded-lg p-5 cursor-pointer hover:shadow-md transition-all group relative overflow-hidden">
+             <div className="absolute top-0 right-0 -mr-4 -mt-4 opacity-5 group-hover:scale-110 transition-transform"><Users className="w-24 h-24 text-[#1976D2]" /></div>
+             <div className="w-10 h-10 bg-white rounded-full flex items-center justify-center text-[#1976D2] shadow-sm mb-3 group-hover:scale-110 transition-transform"><Users className="w-5 h-5" /></div>
+             <h3 className="text-lg font-bold text-[#1C1E21] mb-1">Attendees & Leads</h3>
+             <p className="text-[#606770] text-[13px]">Monitor system engagement.</p>
+          </div>
+        </div>
+      )}
+
+      <div className="grid grid-cols-1 lg:grid-cols-[1fr_300px] gap-4">
       {/* Booth Map Area */}
       <div className="lg:h-[450px]">
         <BoothMap />
@@ -2927,13 +5578,21 @@ const Dashboard = ({ events, onSelectEvent }: { events: ExpoEvent[], onSelectEve
             { time: '11:15 AM', title: 'The HBCU Experience', room: 'Main Stage', speaker: 'Panel' },
             { time: '01:00 PM', title: 'Student Athlete Seminar', room: 'Room 305', speaker: 'Coach Bell' },
             { time: '02:30 PM', title: 'Financial Aid Basics', room: 'Room 302', speaker: 'FAFSA Team' },
-          ].map((w, i) => (
-            <div key={i} className="pb-3 border-bottom border-[#E4E6EB] last:border-0 group">
-              <div className="font-mono text-[11px] text-[#D32F2F] font-bold">{w.time}</div>
-              <div className="text-[13px] font-bold text-[#1C1E21] group-hover:text-[#1976D2] transition-colors">{w.title}</div>
-              <div className="text-[11px] text-[#606770]">{w.room} • {w.speaker}</div>
-            </div>
-          ))}
+          ].map((w, i) => {
+            const happening = isWorkshopHappeningNow(w.time);
+            const upcoming = isWorkshopUpcoming(w.time);
+            return (
+              <div key={i} className={cn("pb-3 border-b border-[#E4E6EB] last:border-0 group", happening ? "bg-[#FFF5F5] border-l-4 border-[#D32F2F] pl-2 -ml-2" : upcoming ? "bg-[#E3F2FD] border-l-4 border-[#1976D2] pl-2 -ml-2" : "")}>
+                <div className="font-mono text-[11px] font-bold flex items-center gap-2 text-[#D32F2F]">
+                  {w.time}
+                  {happening && <span className="px-1.5 py-0.5 bg-[#D32F2F] text-white rounded text-[8px] uppercase font-black shadow-sm animate-pulse">Live</span>}
+                  {upcoming && <span className="px-1.5 py-0.5 bg-[#1976D2] text-white rounded text-[8px] uppercase font-black shadow-sm">Upcoming</span>}
+                </div>
+                <div className="text-[13px] font-bold text-[#1C1E21] group-hover:text-[#1976D2] transition-colors">{w.title}</div>
+                <div className="text-[11px] text-[#606770]">{w.room} • {w.speaker}</div>
+              </div>
+            );
+          })}
         </div>
         
         {/* Quick Stats Integration */}
@@ -2955,12 +5614,10 @@ const Dashboard = ({ events, onSelectEvent }: { events: ExpoEvent[], onSelectEve
 
       {/* Timeline/Events Area */}
       <div className="lg:col-span-2 bg-white rounded-lg border border-[#E4E6EB] p-4 flex gap-4 overflow-x-auto shadow-sm no-scrollbar">
-        {displayEvents.length === 0 ? (
-          <div className="py-8 px-4 text-center w-full opacity-40 italic text-[13px]">
-            {activeFilter === 'all' ? 'No upcoming events scheduled.' : 'You haven\'t saved any events yet.'}
-          </div>
+        {events.length === 0 ? (
+          <div className="py-8 px-4 text-center w-full opacity-40 italic text-[13px]">No upcoming events scheduled.</div>
         ) : (
-          displayEvents.map((event) => {
+          events.map((event) => {
             const dateObj = new Date(event.date);
             // Handling timezone drift for simple YYYY-MM-DD strings
             const userDate = new Date(dateObj.getTime() + dateObj.getTimezoneOffset() * 60000);
@@ -2973,7 +5630,6 @@ const Dashboard = ({ events, onSelectEvent }: { events: ExpoEvent[], onSelectEve
                 month={monthShort} 
                 day={dayNum} 
                 city={event.city} 
-                isSaved={user.savedEvents?.includes(event.id)}
                 onClick={() => onSelectEvent(event)}
               />
             );
@@ -2984,13 +5640,14 @@ const Dashboard = ({ events, onSelectEvent }: { events: ExpoEvent[], onSelectEve
            <span className="text-[12px] font-semibold">More Dates</span>
         </div>
       </div>
+     </div>
     </div>
   );
 };
 
 // --- App Root ---
 
-const CalendarView = ({ events, onSelectEvent }: { events: ExpoEvent[], onSelectEvent: (event: ExpoEvent) => void }) => {
+const CalendarView = ({ events, onSelectEvent, setActiveView }: { events: ExpoEvent[], onSelectEvent: (event: ExpoEvent) => void, setActiveView: (view: string) => void }) => {
   const [currentDate, setCurrentDate] = useState(new Date());
   
   const monthStart = startOfMonth(currentDate);
@@ -3080,7 +5737,8 @@ export default function App() {
   const [needsRole, setNeedsRole] = useState(false);
   const [dashboardMode, setDashboardMode] = useState<'list' | 'calendar'>('list');
   const [selectedEvent, setSelectedEvent] = useState<ExpoEvent | null>(null);
-  const [activeView, setActiveView] = useState<'dashboard' | 'settings' | 'management' | 'broadcast' | 'scholarship' | 'resources'>('dashboard');
+  const [isPromptDismissed, setIsPromptDismissed] = useState(false);
+  const [activeView, setActiveView] = useState<'dashboard' | 'settings' | 'management' | 'broadcast' | 'scholarship' | 'resources' | 'workshops' | 'floorplan' | 'digital-card' | 'lead-capture' | 'leads'>('dashboard');
   const [events, setEvents] = useState<ExpoEvent[]>([]);
   const [isLogoutConfirmOpen, setIsLogoutConfirmOpen] = useState(false);
   const [eventToEdit, setEventToEdit] = useState<ExpoEvent | null>(null);
@@ -3090,57 +5748,64 @@ export default function App() {
   const [manualEmail, setManualEmail] = useState('');
   const [manualPassword, setManualPassword] = useState('');
   const [isSignUp, setIsSignUp] = useState(false);
+  const [isForgotPassword, setIsForgotPassword] = useState(false);
+  const [forgotPasswordMsg, setForgotPasswordMsg] = useState('');
   const [authError, setAuthError] = useState('');
 
   useEffect(() => {
     let unsubscribeNotifs: (() => void) | null = null;
     let unsubscribeEvents: (() => void) | null = null;
 
-    const unsubscribeAuth = onAuthStateChanged(auth, (firebaseUser) => {
+    const unsubscribeAuth = onAuthStateChanged(auth, async (firebaseUser) => {
       setFUser(firebaseUser);
       if (firebaseUser) {
-        // User Profile Listener
-        const unsubscribeUser = onSnapshot(doc(db, 'users', firebaseUser.uid), (userDoc) => {
-          if (userDoc.exists()) {
-            setUser(userDoc.data() as AppUser);
-            setNeedsRole(false);
-          } else {
-            setNeedsRole(true);
-            setUser(null);
-          }
-        });
+        const userDoc = await getDoc(doc(db, 'users', firebaseUser.uid));
+        let userRole: Role | undefined = undefined;
+        
+        if (userDoc.exists()) {
+          const userData = userDoc.data() as AppUser;
+          setUser(userData);
+          setNeedsRole(false);
+          userRole = userData.role;
 
-        // Notifications listener
-        const qNotif = query(
-          collection(db, `users/${firebaseUser.uid}/notifications`),
-          orderBy('createdAt', 'desc')
-        );
-        unsubscribeNotifs = onSnapshot(qNotif, (snapshot) => {
-          const notifs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Notification));
-          setNotifications(notifs);
-        }, (err) => {
-          handleFirestoreError(err, OperationType.LIST, 'notifications');
-        });
+          // Notifications listener
+          const qNotif = query(
+            collection(db, `users/${firebaseUser.uid}/notifications`),
+            orderBy('createdAt', 'desc')
+          );
+          unsubscribeNotifs = onSnapshot(qNotif, (snapshot) => {
+            const notifs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Notification));
+            setNotifications(notifs);
+          }, (err) => {
+            handleFirestoreError(err, OperationType.LIST, 'notifications');
+          });
+
+        } else {
+          setNeedsRole(true);
+        }
 
         // Events listener (Global)
-        const qEvents = query(collection(db, 'events'), orderBy('date', 'asc'));
+        const eventsRef = collection(db, 'events');
+        const qEvents = userRole === 'admin' 
+          ? query(eventsRef, orderBy('date', 'asc'))
+          : query(eventsRef, where('status', '==', 'published'), orderBy('date', 'asc'));
+        
         unsubscribeEvents = onSnapshot(qEvents, (snapshot) => {
           const fetchedEvents = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as ExpoEvent));
-          setEvents(fetchedEvents);
+          // Manual fallback for drafts just in case
+          const filtered = userRole === 'admin' 
+            ? fetchedEvents 
+            : fetchedEvents.filter(e => e.status !== 'draft'); 
+          setEvents(filtered);
         });
-
-        // Cleanup user listener on auth change
-        return () => {
-          unsubscribeUser();
-          if (unsubscribeNotifs) unsubscribeNotifs();
-          if (unsubscribeEvents) unsubscribeEvents();
-        };
 
       } else {
         setUser(null);
         setNeedsRole(false);
         setNotifications([]);
         setEvents([]);
+        if (unsubscribeNotifs) unsubscribeNotifs();
+        if (unsubscribeEvents) unsubscribeEvents();
       }
       setLoading(false);
     });
@@ -3151,6 +5816,40 @@ export default function App() {
       if (unsubscribeEvents) unsubscribeEvents();
     };
   }, []);
+
+  useEffect(() => {
+    const urlParams = new URLSearchParams(window.location.search);
+    const paymentSuccess = urlParams.get('payment_success');
+    const paymentCancel = urlParams.get('payment_cancel');
+    const eventId = urlParams.get('eventId');
+    
+    if (paymentSuccess === 'true' && eventId && user && user.role === 'recruiter') {
+      const unlockEvent = async () => {
+         try {
+           const unlockedEvents = user.unlockedEvents || [];
+           if (!unlockedEvents.includes(eventId)) {
+              await updateDoc(doc(db, 'users', user.uid), {
+                unlockedEvents: [...unlockedEvents, eventId]
+              });
+              setUser({ ...user, unlockedEvents: [...unlockedEvents, eventId] });
+           }
+           setActiveView('lead-capture');
+           if (eventId === 'all_events') {
+             alert('Payment successful! You have unlocked QR Code scanning for ALL events.');
+           } else {
+             alert('Payment successful! You have unlocked QR Code scanning for this event.');
+           }
+           window.history.replaceState({}, document.title, window.location.pathname);
+         } catch (error) {
+           console.error('Error unlocking event:', error);
+         }
+      };
+      unlockEvent();
+    } else if (paymentCancel === 'true') {
+      alert('Payment was cancelled.');
+      window.history.replaceState({}, document.title, window.location.pathname);
+    }
+  }, [user]);
 
   const markAsRead = async (notifId: string) => {
     if (!user) return;
@@ -3208,6 +5907,26 @@ export default function App() {
     }
   };
 
+  const handleForgotPassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAuthError('');
+    setForgotPasswordMsg('');
+    if (!manualEmail) return setAuthError('Please enter your email address to reset your password');
+    try {
+      await sendPasswordResetEmail(auth, manualEmail);
+      setForgotPasswordMsg('Password reset email sent. Please check your inbox.');
+    } catch (error: any) {
+      console.error('Password reset error:', error);
+      if (error.code === 'auth/invalid-email') {
+        setAuthError('Invalid email address');
+      } else if (error.code === 'auth/user-not-found') {
+        setAuthError('User not found');
+      } else {
+        setAuthError('Could not send reset email. Please try again later.');
+      }
+    }
+  };
+
   const handleLogout = async () => {
     await signOut(auth);
     setIsLogoutConfirmOpen(false);
@@ -3242,12 +5961,7 @@ export default function App() {
     }
   };
 
-  const isProfileIncomplete = user && (user.role === 'student' || user.role === 'parent') && (
-    !user.school || 
-    !user.interests || 
-    user.interests.length === 0 || 
-    (user.role === 'student' && (!user.major || !user.graduationYear))
-  );
+  const isProfileIncomplete = user && (user.role === 'student' || user.role === 'parent') && (!user.school || !user.interests || user.interests.length === 0);
 
   if (loading) return <LoadingScreen />;
 
@@ -3313,33 +6027,169 @@ export default function App() {
                 <div className="text-base font-semibold truncate">{user.displayName}</div>
                 <div className="text-[11px] opacity-60 mt-1">NCRF Foundation</div>
               </div>
-              <nav className="flex-grow">
-                <ul className="space-y-1">
-                  {[
-                    { label: 'Event Dashboard', active: activeView === 'dashboard' && !selectedEvent, onClick: () => { setSelectedEvent(null); setActiveView('dashboard'); setEventToEdit(null); }, roles: ['student', 'parent', 'admin'] },
-                    { label: 'My Scholarship Path', active: activeView === 'scholarship', onClick: () => setActiveView('scholarship'), roles: ['student'] },
-                    { label: 'Guidance Resources', active: activeView === 'resources', onClick: () => setActiveView('resources'), roles: ['parent'] },
-                    { label: 'Event Management', active: activeView === 'management', onClick: () => { setActiveView('management'); setEventToEdit(null); }, roles: ['admin'] },
-                    { label: 'Broadcast Hub', active: activeView === 'broadcast', onClick: () => setActiveView('broadcast'), roles: ['admin'] },
-                    { label: 'Workshop Schedule', roles: ['student', 'parent', 'admin'] },
-                    { label: 'Booth Floor Plan', roles: ['student', 'parent', 'admin'] },
-                    { label: 'NCRF Resources', roles: ['student', 'parent', 'admin'] },
-                    { label: 'Profile Settings', active: activeView === 'settings', onClick: () => setActiveView('settings'), roles: ['student', 'parent', 'admin'] }
-                  ]
-                  .filter(item => item.roles.includes(user.role))
-                  .map((item, i) => (
-                    <li 
-                      key={i} 
-                      onClick={item.onClick}
-                      className={cn(
-                        "py-2.5 text-[14px] cursor-pointer transition-colors hover:text-white",
-                        item.active ? "text-white font-bold" : "text-white/70"
-                      )}
-                    >
-                      {item.label}
-                    </li>
-                  ))}
-                </ul>
+              <nav className="flex-grow overflow-y-auto no-scrollbar">
+                <div className="space-y-6">
+                  {/* General Navigation */}
+                  <div>
+                    <h3 className="text-[10px] font-bold uppercase tracking-[0.2em] text-white/30 mb-3 px-2">Main Navigation</h3>
+                    <ul className="space-y-1">
+                      {[
+                        { 
+                          label: 'Event Dashboard', 
+                          icon: Calendar,
+                          active: activeView === 'dashboard' && !selectedEvent, 
+                          onClick: () => { setSelectedEvent(null); setActiveView('dashboard'); setEventToEdit(null); }, 
+                          roles: ['student', 'parent', 'admin'] 
+                        },
+                        { 
+                          label: 'My Scholarship Path', 
+                          icon: GraduationCap,
+                          active: activeView === 'scholarship', 
+                          onClick: () => setActiveView('scholarship'), 
+                          roles: ['student'] 
+                        },
+                        { 
+                          label: 'Student Portal', 
+                          icon: LayoutDashboard,
+                          active: activeView === 'digital-card', 
+                          onClick: () => setActiveView('digital-card'), 
+                          roles: ['student'] 
+                        },
+                        { 
+                          label: 'Lead Capture Scan', 
+                          icon: ScanLine,
+                          active: activeView === 'lead-capture', 
+                          onClick: () => setActiveView('lead-capture'), 
+                          roles: ['recruiter', 'admin'] 
+                        },
+                        { 
+                          label: 'Captured Leads', 
+                          icon: Users,
+                          active: activeView === 'leads', 
+                          onClick: () => setActiveView('leads'), 
+                          roles: ['recruiter', 'admin'] 
+                        },
+                        { 
+                          label: 'Guidance Resources', 
+                          icon: Users,
+                          active: activeView === 'resources', 
+                          onClick: () => setActiveView('resources'), 
+                          roles: ['parent'] 
+                        },
+                        { 
+                          label: 'Workshop Schedule', 
+                          icon: Clock,
+                          active: activeView === 'workshops', 
+                          onClick: () => setActiveView('workshops'), 
+                          roles: ['student', 'parent', 'admin'] 
+                        },
+                        { 
+                          label: 'Booth Floor Plan', 
+                          icon: MapIcon,
+                          active: activeView === 'floorplan', 
+                          onClick: () => setActiveView('floorplan'), 
+                          roles: ['student', 'parent', 'admin'] 
+                        },
+                        { 
+                          label: 'NCRF Resources', 
+                          icon: Info,
+                          roles: ['student', 'parent', 'admin'],
+                          onClick: () => window.open('https://www.ncrfoundation.org/', '_blank')
+                        }
+                      ]
+                      .filter(item => item.roles.includes(user.role))
+                      .map((item, i) => (
+                        <li 
+                          key={i} 
+                          onClick={item.onClick}
+                          className={cn(
+                            "flex items-center gap-3 px-2 py-2 rounded-lg cursor-pointer transition-all group",
+                            item.active 
+                              ? "bg-white/10 text-white shadow-sm" 
+                              : "text-white/60 hover:text-white hover:bg-white/5"
+                          )}
+                        >
+                          <item.icon className={cn(
+                            "w-4 h-4 transition-colors",
+                            item.active ? "text-[#1976D2]" : "text-white/40 group-hover:text-white/60"
+                          )} />
+                          <span className="text-[14px] font-medium">{item.label}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+
+                  {/* Admin Specific */}
+                  {user.role === 'admin' && (
+                    <div>
+                      <h3 className="text-[10px] font-bold uppercase tracking-[0.2em] text-white/30 mb-3 px-2">Management</h3>
+                      <ul className="space-y-1">
+                        {[
+                          { 
+                            label: 'Event Management', 
+                            icon: CreditCard,
+                            active: activeView === 'management', 
+                            onClick: () => { setActiveView('management'); setEventToEdit(null); }, 
+                            roles: ['admin'] 
+                          },
+                          { 
+                            label: 'Broadcast Hub', 
+                            icon: Bell,
+                            active: activeView === 'broadcast', 
+                            onClick: () => setActiveView('broadcast'), 
+                            roles: ['admin'] 
+                          }
+                        ].map((item, i) => (
+                          <li 
+                            key={i} 
+                            onClick={item.onClick}
+                            className={cn(
+                              "flex items-center gap-3 px-2 py-2 rounded-lg cursor-pointer transition-all group",
+                              item.active 
+                                ? "bg-white/10 text-white shadow-sm" 
+                                : "text-white/60 hover:text-white hover:bg-white/5"
+                            )}
+                          >
+                            <item.icon className={cn(
+                              "w-4 h-4 transition-colors",
+                              item.active ? "text-[#D32F2F]" : "text-white/40 group-hover:text-white/60"
+                            )} />
+                            <span className="text-[14px] font-medium">{item.label}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+
+                  {/* Account Settings */}
+                  <div>
+                    <h3 className="text-[10px] font-bold uppercase tracking-[0.2em] text-white/30 mb-3 px-2">Account</h3>
+                    <ul className="space-y-1">
+                      <li 
+                        onClick={() => setActiveView('settings')}
+                        className={cn(
+                          "flex items-center gap-3 px-2 py-2 rounded-lg cursor-pointer transition-all group",
+                          activeView === 'settings' 
+                            ? "bg-white/10 text-white shadow-sm" 
+                            : "text-white/60 hover:text-white hover:bg-white/5"
+                        )}
+                      >
+                        <UserIcon className={cn(
+                          "w-4 h-4 transition-colors",
+                          activeView === 'settings' ? "text-[#1976D2]" : "text-white/40 group-hover:text-white/60"
+                        )} />
+                        <span className="text-[14px] font-medium">Profile Settings</span>
+                      </li>
+                      <li 
+                        onClick={() => setIsLogoutConfirmOpen(true)}
+                        className="flex items-center gap-3 px-2 py-2 rounded-lg cursor-pointer transition-all text-white/60 hover:text-[#D32F2F] hover:bg-red-500/5 group"
+                      >
+                        <LogOut className="w-4 h-4 text-white/40 group-hover:text-[#D32F2F]" />
+                        <span className="text-[14px] font-medium">Log Out</span>
+                      </li>
+                    </ul>
+                  </div>
+                </div>
               </nav>
               <div className="mt-auto text-[11px] opacity-40">
                 © 2026 NCRF College Expo
@@ -3371,7 +6221,7 @@ export default function App() {
                        <img 
                         src={LOGO_URL} 
                         alt="NCRF Foundation" 
-                        className="h-32 w-auto drop-shadow-2xl" 
+                        className="h-44 w-auto drop-shadow-2xl" 
                         referrerPolicy="no-referrer"
                        />
                      </motion.div>
@@ -3436,62 +6286,126 @@ export default function App() {
                           animate={{ opacity: 1, x: 0 }}
                           className="bg-white border border-[#E4E6EB] p-8 rounded-2xl shadow-sm text-left relative overflow-hidden"
                         >
-                          <div className="flex items-center gap-3 mb-8">
+                          <div className="flex items-center gap-3 mb-6">
                             <div className="w-10 h-10 bg-[#F8F9FA] rounded-lg flex items-center justify-center p-1.5 border border-[#E4E6EB]">
                               <img src={LOGO_URL} alt="NCRF" className="w-full h-full object-contain" referrerPolicy="no-referrer" />
                             </div>
                             <div>
                                <h3 className="text-[16px] font-black text-[#1C1E21] leading-none uppercase tracking-tighter">NCRF Portal</h3>
-                               <p className="text-[10px] font-bold text-[#606770] uppercase tracking-widest mt-0.5">{isSignUp ? 'New Account' : 'Member Login'}</p>
+                               <p className="text-[10px] font-bold text-[#606770] uppercase tracking-widest mt-0.5">Member Access</p>
                             </div>
                           </div>
-                          
-                          <form onSubmit={handleManualAuth} className="space-y-4">
-                            <div className="space-y-1.5">
-                              <label className="text-[10px] font-bold uppercase text-[#606770] tracking-wider pl-1 font-mono">Email Address</label>
-                              <div className="relative">
-                                <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[#8A8D91]" />
-                                <input 
-                                  type="email" 
-                                  value={manualEmail}
-                                  onChange={(e) => setManualEmail(e.target.value)}
-                                  className="w-full bg-[#F0F2F5] border border-[#E4E6EB] rounded-xl pl-10 pr-4 py-2.5 text-[14px] outline-none focus:ring-2 focus:ring-[#1976D2]/20 focus:border-[#1976D2] transition-all"
-                                  placeholder="name@school.edu"
-                                />
-                              </div>
-                            </div>
 
-                            <div className="space-y-1.5">
-                              <label className="text-[10px] font-bold uppercase text-[#606770] tracking-wider pl-1 font-mono">Password</label>
-                              <div className="relative">
-                                <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[#8A8D91]" />
-                                <input 
-                                  type="password" 
-                                  value={manualPassword}
-                                  onChange={(e) => setManualPassword(e.target.value)}
-                                  className="w-full bg-[#F0F2F5] border border-[#E4E6EB] rounded-xl pl-10 pr-4 py-2.5 text-[14px] outline-none focus:ring-2 focus:ring-[#1976D2]/20 focus:border-[#1976D2] transition-all"
-                                  placeholder="••••••••"
-                                />
-                              </div>
-                            </div>
-
-                            <button 
-                              type="submit"
-                              className="w-full py-3 bg-[#D32F2F] text-white font-bold rounded-xl hover:bg-black transition-all shadow-lg active:scale-[0.98] mt-2"
-                            >
-                              {isSignUp ? 'Sign Up for Expo' : 'Log In to Portal'}
-                            </button>
-
-                            <div className="pt-2 text-center text-[12px]">
-                              <button 
-                                type="button" 
-                                onClick={() => setIsSignUp(!isSignUp)}
-                                className="text-[#1976D2] font-semibold hover:underline"
+                          {!isForgotPassword && (
+                            <div className="flex p-1 bg-[#F0F2F5] rounded-xl mb-6">
+                              <button
+                                type="button"
+                                onClick={() => setIsSignUp(false)}
+                                className={cn(
+                                  "flex-grow py-2 text-[13px] font-bold rounded-lg transition-all",
+                                  !isSignUp ? "bg-white text-[#1C1E21] shadow-sm" : "text-[#606770] hover:text-[#1C1E21]"
+                                )}
                               >
-                                {isSignUp ? 'Already have an account? Log In' : "Don't have an account? Sign Up"}
+                                Log In
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setIsSignUp(true)}
+                                className={cn(
+                                  "flex-grow py-2 text-[13px] font-bold rounded-lg transition-all",
+                                  isSignUp ? "bg-white text-[#1C1E21] shadow-sm" : "text-[#606770] hover:text-[#1C1E21]"
+                                )}
+                              >
+                                Sign Up
                               </button>
                             </div>
-                          </form>
+                          )}
+                          
+                          {isForgotPassword ? (
+                            <form onSubmit={handleForgotPassword} className="space-y-4">
+                              {forgotPasswordMsg && (
+                                <div className="p-3 bg-[#E8F5E9] border border-[#C8E6C9] text-[#2E7D32] text-[12px] font-medium rounded-lg">
+                                  {forgotPasswordMsg}
+                                </div>
+                              )}
+                              <div className="space-y-1.5">
+                                <label className="text-[10px] font-bold uppercase text-[#606770] tracking-wider pl-1 font-mono">Email Address</label>
+                                <div className="relative">
+                                  <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[#8A8D91]" />
+                                  <input 
+                                    type="email" 
+                                    value={manualEmail}
+                                    onChange={(e) => setManualEmail(e.target.value)}
+                                    className="w-full bg-[#F0F2F5] border border-[#E4E6EB] rounded-xl pl-10 pr-4 py-2.5 text-[14px] outline-none focus:ring-2 focus:ring-[#1976D2]/20 focus:border-[#1976D2] transition-all"
+                                    placeholder="name@school.edu"
+                                  />
+                                </div>
+                              </div>
+                              <button 
+                                type="submit"
+                                className="w-full py-3 bg-[#D32F2F] text-white font-bold rounded-xl hover:bg-black transition-all shadow-lg active:scale-[0.98] mt-2"
+                              >
+                                Send Reset Link
+                              </button>
+                              <div className="pt-2 text-center text-[12px]">
+                                <button 
+                                  type="button" 
+                                  onClick={() => { setIsForgotPassword(false); setForgotPasswordMsg(''); setAuthError(''); }}
+                                  className="text-[#1976D2] font-semibold hover:underline"
+                                >
+                                  Back to Login
+                                </button>
+                              </div>
+                            </form>
+                          ) : (
+                            <form onSubmit={handleManualAuth} className="space-y-4">
+                              <div className="space-y-1.5">
+                                <label className="text-[10px] font-bold uppercase text-[#606770] tracking-wider pl-1 font-mono">Email Address</label>
+                                <div className="relative">
+                                  <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[#8A8D91]" />
+                                  <input 
+                                    type="email" 
+                                    value={manualEmail}
+                                    onChange={(e) => setManualEmail(e.target.value)}
+                                    className="w-full bg-[#F0F2F5] border border-[#E4E6EB] rounded-xl pl-10 pr-4 py-2.5 text-[14px] outline-none focus:ring-2 focus:ring-[#1976D2]/20 focus:border-[#1976D2] transition-all"
+                                    placeholder="name@school.edu"
+                                  />
+                                </div>
+                              </div>
+
+                              <div className="space-y-1.5">
+                                <div className="flex justify-between items-center pr-1">
+                                  <label className="text-[10px] font-bold uppercase text-[#606770] tracking-wider pl-1 font-mono">Password</label>
+                                  {!isSignUp && (
+                                    <button 
+                                      type="button" 
+                                      onClick={() => { setIsForgotPassword(true); setAuthError(''); }}
+                                      className="text-[10px] text-[#1976D2] font-bold hover:underline"
+                                    >
+                                      Forgot Password?
+                                    </button>
+                                  )}
+                                </div>
+                                <div className="relative">
+                                  <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[#8A8D91]" />
+                                  <input 
+                                    type="password" 
+                                    value={manualPassword}
+                                    onChange={(e) => setManualPassword(e.target.value)}
+                                    className="w-full bg-[#F0F2F5] border border-[#E4E6EB] rounded-xl pl-10 pr-4 py-2.5 text-[14px] outline-none focus:ring-2 focus:ring-[#1976D2]/20 focus:border-[#1976D2] transition-all"
+                                    placeholder="••••••••"
+                                  />
+                                </div>
+                              </div>
+
+                              <button 
+                                type="submit"
+                                className="w-full py-3 bg-[#D32F2F] text-white font-bold rounded-xl hover:bg-black transition-all shadow-lg active:scale-[0.98] mt-2"
+                              >
+                                {isSignUp ? 'Sign Up for Expo' : 'Log In to Portal'}
+                              </button>
+                            </form>
+                          )}
                           
                           <button 
                             onClick={() => { setAuthMode('google'); setAuthError(''); }}
@@ -3511,9 +6425,6 @@ export default function App() {
               ) : (
                 <>
                   <Navbar onOpenNotifications={() => setIsNotificationsOpen(true)} />
-                  {isProfileIncomplete && activeView !== 'settings' && (
-                    <ProfileCompletionPrompt onGoToSettings={() => setActiveView('settings')} />
-                  )}
                   {activeView === 'settings' ? (
                     <ProfileSettings user={user} onUpdate={handleUpdateProfile} />
                   ) : activeView === 'scholarship' && user?.role === 'student' ? (
@@ -3523,6 +6434,90 @@ export default function App() {
                         <p className="text-[#606770] mt-1 font-medium italic">Empowering your future, one application at a time.</p>
                       </div>
                       <ScholarshipTracker />
+                    </div>
+                  ) : activeView === 'workshops' ? (
+                    <div className="max-w-4xl mx-auto py-6">
+                      <div className="mb-8 flex items-center justify-between">
+                        <div>
+                          <h2 className="text-3xl font-black text-[#1C1E21] tracking-tight">Workshop Schedule</h2>
+                          <p className="text-[#606770] mt-1 font-medium italic">Level up your college knowledge with expert-led sessions.</p>
+                        </div>
+                        <div className="bg-[#FFF5F5] text-[#D32F2F] px-4 py-2 rounded-xl border border-[#D32F2F]/10 flex items-center gap-2">
+                          <Clock className="w-4 h-4" />
+                          <span className="text-[12px] font-bold uppercase tracking-wider">Live Sessions</span>
+                        </div>
+                      </div>
+                      <div className="bg-white rounded-2xl border border-[#E4E6EB] shadow-sm overflow-hidden mb-6">
+                        <div className="p-6 border-b border-[#F0F2F5] bg-gray-50/50">
+                           <div className="flex items-center gap-4 text-[11px] font-bold text-[#606770] uppercase tracking-widest">
+                             <div className="flex items-center gap-1.5"><div className="w-2 h-2 bg-[#D32F2F] rounded-full" /> Morning</div>
+                             <div className="flex items-center gap-1.5"><div className="w-2 h-2 bg-[#1976D2] rounded-full" /> Afternoon</div>
+                           </div>
+                        </div>
+                        <div className="divide-y divide-[#F0F2F5]">
+                          {[
+                            { time: '09:30 AM', title: 'Scholarships 101: Finding Free Money', room: 'Room 302', speaker: 'Dr. Theresa Price', desc: 'Expert tips on identifying and applying for scholarships that fit your profile.' },
+                            { time: '10:30 AM', title: 'HBCU Panel: The Culture and Academic Excellence', room: 'Main Stage', speaker: 'Admissions Leaders', desc: 'Hear from leaders of top HBCUs about why they might be the right fit for you.' },
+                            { time: '11:15 AM', title: 'Writing the Perfect Admissions Essay', room: 'Room 401', speaker: 'Prof. Miller', desc: 'Learn how to stand out in your application with a compelling personal statement.' },
+                            { time: '01:00 PM', title: 'Student Athlete Seminar: Beyond the Field', room: 'Room 305', speaker: 'Coach Bell', desc: 'Essential information for students planning to compete in collegiate athletics.' },
+                            { time: '02:30 PM', title: 'Financial Aid & FAFSA Mastery', room: 'Room 302', speaker: 'FAFSA Specialists', desc: 'Step-by-step guidance on completing your financial aid requirements.' },
+                            { time: '03:45 PM', title: 'Career Pathways in STEM', room: 'Tech Lab 1', speaker: 'IBM & Google Mentors', desc: 'Discover high-demand careers and the educational paths that lead to them.' },
+                          ].map((w, i) => {
+                            const happening = isWorkshopHappeningNow(w.time);
+                            const upcoming = isWorkshopUpcoming(w.time);
+                            return (
+                            <div key={i} className={cn("p-6 transition-colors group flex flex-col md:flex-row gap-4 md:items-start relative", happening ? "bg-[#FFF5F5]" : upcoming ? "bg-[#E3F2FD]" : "hover:bg-[#F8F9FA]")}>
+                              {happening && <div className="absolute left-0 top-0 bottom-0 w-1 bg-[#D32F2F]"></div>}
+                              {upcoming && <div className="absolute left-0 top-0 bottom-0 w-1 bg-[#1976D2]"></div>}
+                              <div className="md:w-32 flex-shrink-0">
+                                <div className="font-mono text-[14px] text-[#D32F2F] font-black group-hover:scale-110 origin-left transition-transform flex items-center gap-2">
+                                  {w.time}
+                                </div>
+                                <div className="flex gap-2 items-center mt-1">
+                                  {happening && <span className="px-1.5 py-0.5 bg-[#D32F2F] text-white rounded text-[9px] uppercase font-black shadow-sm animate-pulse">Live</span>}
+                                  {upcoming && <span className="px-1.5 py-0.5 bg-[#1976D2] text-white rounded text-[9px] uppercase font-black shadow-sm">Upcoming</span>}
+                                </div>
+                                <div className="text-[10px] uppercase font-bold text-[#606770] mt-1 group-hover:text-[#1976D2] transition-colors">{w.room}</div>
+                              </div>
+                              <div className="flex-grow">
+                                <h4 className="text-[18px] font-black text-[#1C1E21] mb-1 group-hover:text-[#1976D2] transition-colors">{w.title}</h4>
+                                <p className="text-[13px] text-[#606770] line-clamp-2 mb-3 leading-relaxed">{w.desc}</p>
+                                <div className="flex items-center gap-2">
+                                  <div className="w-6 h-6 bg-[#E3F2FD] rounded-full flex items-center justify-center">
+                                    <Users className="w-3 h-3 text-[#1976D2]" />
+                                  </div>
+                                  <span className="text-[12px] font-bold text-[#1C1E21]">{w.speaker}</span>
+                                </div>
+                              </div>
+                              <button className="md:self-center px-4 py-2 bg-[#F0F2F5] text-[#606770] text-[11px] font-bold rounded-xl hover:bg-[#E4E6EB] hover:text-[#1C1E21] transition-all uppercase tracking-wider">
+                                Add to My List
+                              </button>
+                            </div>
+                          )})}
+                        </div>
+                      </div>
+                    </div>
+                  ) : activeView === 'floorplan' ? (
+                    <div className="max-w-6xl mx-auto py-6 h-[calc(100vh-100px)] flex flex-col">
+                      <div className="mb-6 flex items-center justify-between">
+                        <div>
+                          <h2 className="text-3xl font-black text-[#1C1E21] tracking-tight">Interactive Floor Plan</h2>
+                          <p className="text-[#606770] mt-1 font-medium italic">Locate admissions booths, seminar rooms, and resources.</p>
+                        </div>
+                        <div className="flex gap-2">
+                           <div className="bg-white border border-[#E4E6EB] px-4 py-2 rounded-xl flex items-center gap-2 shadow-sm">
+                             <div className="w-3 h-3 bg-[#E3F2FD] border border-[#1976D2]" />
+                             <span className="text-[11px] font-bold uppercase text-[#606770]">Partners</span>
+                           </div>
+                           <div className="bg-white border border-[#E4E6EB] px-4 py-2 rounded-xl flex items-center gap-2 shadow-sm">
+                             <div className="w-3 h-3 bg-white border border-[#E4E6EB]" />
+                             <span className="text-[11px] font-bold uppercase text-[#606770]">Exhibitors</span>
+                           </div>
+                        </div>
+                      </div>
+                      <div className="flex-grow">
+                        <BoothMap />
+                      </div>
                     </div>
                   ) : activeView === 'resources' && user?.role === 'parent' ? (
                     <div className="max-w-4xl mx-auto py-10">
@@ -3535,6 +6530,20 @@ export default function App() {
                         <h3 className="text-lg font-bold text-[#1C1E21] mb-2">Resource Library Under Preparation</h3>
                         <p className="text-[#606770] max-w-sm mx-auto text-[14px]">Access exclusive webinars, checklists, and expert advice specifically curated for parents and guardians.</p>
                       </div>
+                    </div>
+                  ) : activeView === 'digital-card' && user?.role === 'student' ? (
+                    <StudentPortal user={user} setActiveView={setActiveView} />
+                  ) : activeView === 'lead-capture' && (user?.role === 'recruiter' || user?.role === 'admin') ? (
+                    <div className="max-w-4xl mx-auto py-6">
+                      <div className="mb-8">
+                        <h2 className="text-3xl font-black text-[#1C1E21] tracking-tight">Lead Capture Scan</h2>
+                        <p className="text-[#606770] mt-1 font-medium italic">Scan student QR codes to instantly capture contact info and notes.</p>
+                      </div>
+                      <LeadScanner user={user!} events={events} />
+                    </div>
+                  ) : activeView === 'leads' && (user?.role === 'recruiter' || user?.role === 'admin') ? (
+                    <div className="max-w-5xl mx-auto py-6">
+                      <LeadsList user={user!} />
                     </div>
                   ) : activeView === 'management' && user?.role === 'admin' ? (
                     <AdminEventManager events={events} initialEditEvent={eventToEdit} />
@@ -3574,6 +6583,9 @@ export default function App() {
                     />
                   ) : (
                     <div className="space-y-6">
+                      {isProfileIncomplete && !isPromptDismissed && (
+                        <ProfileCompletionPrompt onGoToSettings={() => setActiveView('settings')} onDismiss={() => setIsPromptDismissed(true)} />
+                      )}
                       <div className="flex items-center justify-between">
                         <h2 className="text-2xl font-black text-[#1C1E21] tracking-tight">Expo Dashboard</h2>
                         <div className="flex bg-white rounded-lg p-1 border border-[#E4E6EB] shadow-sm">
@@ -3599,9 +6611,9 @@ export default function App() {
                       </div>
 
                       {dashboardMode === 'calendar' ? (
-                        <CalendarView events={events} onSelectEvent={(e) => setSelectedEvent(e)} />
+                        <CalendarView events={events} onSelectEvent={(e) => setSelectedEvent(e)} setActiveView={setActiveView} />
                       ) : (
-                        <Dashboard events={events} onSelectEvent={(e) => setSelectedEvent(e)} />
+                        <Dashboard events={events} onSelectEvent={(e) => setSelectedEvent(e)} setActiveView={setActiveView} />
                       )}
                     </div>
                   )}
