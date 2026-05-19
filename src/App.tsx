@@ -91,7 +91,8 @@ import {
   Settings,
   Eye,
   EyeOff,
-  Upload
+  Upload,
+  X
 } from 'lucide-react';
 import { 
   format, 
@@ -183,6 +184,8 @@ interface AppUser {
   preferredContact?: 'email' | 'phone' | 'linkedin';
   unlockedEvents?: string[];
   createdAt: string;
+  isAthlete?: boolean;
+  sport?: string;
 }
 
 interface Lead {
@@ -202,6 +205,8 @@ interface Lead {
   studentWorkAuth?: string;
   studentResumeUrl?: string;
   studentPreferredContact?: string;
+  studentIsAthlete?: boolean;
+  studentSport?: string;
   notes?: string;
   scannedAt: string;
 }
@@ -402,6 +407,8 @@ const StudentDigitalCard = ({ user }: { user: AppUser }) => {
     workAuth: user.workAuthorization || 'authorized',
     resumeUrl: user.resumeUrl || '',
     prefContact: user.preferredContact || 'email',
+    isAthlete: user.isAthlete || false,
+    sport: user.sport || '',
     type: 'expo-lead-v1'
   });
 
@@ -634,6 +641,8 @@ const LeadScanner = ({ user, events }: { user: AppUser, events: ExpoEvent[] }) =
         studentWorkAuth: scanResult.workAuth,
         studentResumeUrl: scanResult.resumeUrl,
         studentPreferredContact: scanResult.prefContact,
+        studentIsAthlete: scanResult.isAthlete,
+        studentSport: scanResult.sport,
         notes,
         scannedAt: new Date().toISOString()
       };
@@ -850,7 +859,7 @@ const LeadsList = ({ user }: { user: AppUser }) => {
     });
 
   const downloadCSV = () => {
-    const headers = ['Name', 'Email', 'Phone', 'School', 'Major', 'Grad Year', 'Work Auth', 'Interests', 'Resume URL', 'Preferred Contact', 'Notes', 'Scanned At'];
+    const headers = ['Name', 'Email', 'Phone', 'School', 'Major', 'Grad Year', 'Work Auth', 'Athlete', 'Sport', 'Interests', 'Resume URL', 'Preferred Contact', 'Notes', 'Scanned At'];
     const rows = filteredAndSortedLeads.map(l => [
       l.studentName,
       l.studentEmail,
@@ -859,6 +868,8 @@ const LeadsList = ({ user }: { user: AppUser }) => {
       l.studentMajor || 'N/A',
       l.studentGradYear || 'N/A',
       l.studentWorkAuth || 'authorized',
+      l.studentIsAthlete ? 'Yes' : 'No',
+      l.studentSport || 'N/A',
       l.studentInterests?.join(', ') || 'N/A',
       l.studentResumeUrl || 'N/A',
       l.studentPreferredContact || 'email',
@@ -952,6 +963,11 @@ const LeadsList = ({ user }: { user: AppUser }) => {
               {lead.studentMajor && (
                 <span className="px-2 py-0.5 bg-[#F0F2F5] text-[#1C1E21] text-[10px] font-bold rounded border border-[#E4E6EB]">
                   {lead.studentMajor}
+                </span>
+              )}
+              {lead.studentIsAthlete && (
+                <span className="px-2 py-0.5 bg-[#E8F5E9] text-[#2E7D32] text-[10px] font-bold rounded border border-[#2E7D32]/20">
+                  Athlete ({lead.studentSport || 'Unknown'})
                 </span>
               )}
               {lead.studentWorkAuth && (
@@ -2134,6 +2150,8 @@ const ProfileSettings = ({ user, onUpdate }: { user: AppUser, onUpdate: (data: P
   const [preferredContact, setPreferredContact] = useState(user.preferredContact || 'email');
   const [interestInput, setInterestInput] = useState('');
   const [interests, setInterests] = useState<string[]>(user.interests || []);
+  const [isAthlete, setIsAthlete] = useState<boolean>(user.isAthlete || false);
+  const [sport, setSport] = useState(user.sport || '');
   const [saving, setSaving] = useState(false);
   const [uploadingResume, setUploadingResume] = useState(false);
   const [resumeProgress, setResumeProgress] = useState(0);
@@ -2213,7 +2231,9 @@ const ProfileSettings = ({ user, onUpdate }: { user: AppUser, onUpdate: (data: P
       phone, 
       resumeUrl, 
       workAuthorization, 
-      preferredContact 
+      preferredContact,
+      isAthlete,
+      sport
     });
     setSaving(false);
     alert('Profile updated successfully!');
@@ -2330,6 +2350,41 @@ const ProfileSettings = ({ user, onUpdate }: { user: AppUser, onUpdate: (data: P
                         className="w-full bg-[#F0F2F5] border border-[#E4E6EB] rounded px-4 py-2 text-[14px] outline-none focus:border-[#1976D2]"
                         placeholder="e.g. 2026"
                       />
+                    </div>
+                  </div>
+                )}
+
+                {user.role === 'student' && (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-[11px] font-bold uppercase text-[#606770] mb-1.5 flex items-center gap-2">
+                        <input
+                          type="checkbox"
+                          checked={isAthlete}
+                          onChange={(e) => setIsAthlete(e.target.checked)}
+                          className="w-3.5 h-3.5"
+                        />
+                        Student Athlete
+                      </label>
+                      {isAthlete && (
+                        <div className="mt-2">
+                          <label className="block text-[11px] font-bold uppercase text-[#606770] mb-1.5">Sport</label>
+                          <select 
+                            value={sport}
+                            onChange={(e) => setSport(e.target.value)}
+                            className="w-full bg-[#F0F2F5] border border-[#E4E6EB] rounded px-4 py-2 text-[14px] outline-none focus:border-[#1976D2]"
+                          >
+                            <option value="">Select Sport</option>
+                            <option value="Football">Football</option>
+                            <option value="Basketball">Basketball</option>
+                            <option value="Baseball/Softball">Baseball/Softball</option>
+                            <option value="Soccer">Soccer</option>
+                            <option value="Track & Field">Track & Field</option>
+                            <option value="Volleyball">Volleyball</option>
+                            <option value="Other">Other</option>
+                          </select>
+                        </div>
+                      )}
                     </div>
                   </div>
                 )}
@@ -2470,6 +2525,7 @@ const AdminEventManager = ({ events, initialEditEvent }: { events: ExpoEvent[], 
   const [floorPlanUrl, setFloorPlanUrl] = useState('');
   const [timezone, setTimezone] = useState('');
   const [editingEventId, setEditingEventId] = useState<string | null>(null);
+  const [isEventModalOpen, setIsEventModalOpen] = useState(false);
   
   // Seminar Form State
   const [selectedEventId, setSelectedEventId] = useState('');
@@ -2518,6 +2574,7 @@ const AdminEventManager = ({ events, initialEditEvent }: { events: ExpoEvent[], 
   const [eventErrors, setEventErrors] = useState<Record<string, string>>({});
   const [seminarErrors, setSeminarErrors] = useState<Record<string, string>>({});
   const [selectedSeminarIds, setSelectedSeminarIds] = useState<string[]>([]);
+  const [selectedSponsorIds, setSelectedSponsorIds] = useState<string[]>([]);
 
   useEffect(() => {
     if (initialEditEvent) {
@@ -2654,12 +2711,12 @@ const AdminEventManager = ({ events, initialEditEvent }: { events: ExpoEvent[], 
     setMapUrl(event.mapUrl || '');
     setFloorPlanUrl(event.floorPlanUrl || '');
     setTimezone(event.timezone || '');
-    // Scroll to form
-    window.scrollTo({ top: 0, behavior: 'smooth' });
+    setIsEventModalOpen(true);
   };
 
   const handleCancelEdit = () => {
     setEditingEventId(null);
+    setIsEventModalOpen(false);
     setName(''); setDate(''); setCity(''); setLocation(''); setDescription(''); setMapUrl(''); setFloorPlanUrl(''); setTimezone('');
   };
 
@@ -2725,6 +2782,7 @@ const AdminEventManager = ({ events, initialEditEvent }: { events: ExpoEvent[], 
       }
 
       setName(''); setDate(''); setCity(''); setLocation(''); setDescription(''); setMapUrl(''); setFloorPlanUrl(''); setTimezone('');
+      setIsEventModalOpen(false);
     } catch (error) {
       handleFirestoreError(error, editingEventId ? OperationType.UPDATE : OperationType.CREATE, 'events');
     } finally {
@@ -2764,6 +2822,7 @@ const AdminEventManager = ({ events, initialEditEvent }: { events: ExpoEvent[], 
       
       alert('Draft saved successfully!');
       setName(''); setDate(''); setCity(''); setLocation(''); setDescription(''); setMapUrl(''); setFloorPlanUrl(''); setTimezone('');
+      setIsEventModalOpen(false);
     } catch (error) {
       handleFirestoreError(error, editingEventId ? OperationType.UPDATE : OperationType.CREATE, 'events');
     } finally {
@@ -3034,6 +3093,25 @@ const AdminEventManager = ({ events, initialEditEvent }: { events: ExpoEvent[], 
     }
   };
 
+  const handleBulkDeleteSponsors = async () => {
+    if (!selectedEventId || selectedSponsorIds.length === 0) return;
+    if (!confirm(`Are you sure you want to delete ${selectedSponsorIds.length} sponsors?`)) return;
+    
+    setSaving(true);
+    try {
+      const batch = selectedSponsorIds.map(id => 
+        deleteDoc(doc(db, 'events', selectedEventId, 'sponsors', id))
+      );
+      await Promise.all(batch);
+      alert(`Successfully deleted ${selectedSponsorIds.length} sponsors!`);
+      setSelectedSponsorIds([]);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, 'sponsors');
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const handleUpdateRegStatus = async (path: string, newStatus: string) => {
     setSaving(true);
     try {
@@ -3064,195 +3142,221 @@ const AdminEventManager = ({ events, initialEditEvent }: { events: ExpoEvent[], 
       animate={{ opacity: 1, y: 0 }}
       className="max-w-3xl mx-auto w-full space-y-8 pb-12"
     >
-      {/* Event Creator */}
-      <div className="bg-white rounded-lg border border-[#E4E6EB] shadow-sm p-8">
-        <h2 className="text-2xl font-bold text-[#1C1E21] mb-6 tracking-tight">{editingEventId ? 'Edit Expo Event' : 'Create New Expo Event'}</h2>
-        <form onSubmit={handleCreateEvent} className="space-y-5">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-            <div>
-              <label className="block text-[11px] font-bold uppercase text-[#606770] mb-1.5 flex justify-between">
-                Event Name
-                {eventErrors.name && <span className="text-[#D32F2F] normal-case font-medium">{eventErrors.name}</span>}
-              </label>
-              <input 
-                type="text" 
-                value={name}
-                onChange={(e) => {
-                  setName(e.target.value);
-                  if (eventErrors.name) setEventErrors(prev => ({ ...prev, name: '' }));
-                }}
-                className={cn(
-                  "w-full bg-[#F0F2F5] border rounded px-4 py-2 text-[14px] outline-none focus:border-[#1976D2] transition-colors",
-                  eventErrors.name ? "border-[#D32F2F]" : "border-[#E4E6EB]"
-                )}
-                placeholder="e.g. California Black College Expo"
-              />
-            </div>
-            <div>
-              <label className="block text-[11px] font-bold uppercase text-[#606770] mb-1.5 flex justify-between">
-                Date
-                {eventErrors.date && <span className="text-[#D32F2F] normal-case font-medium">{eventErrors.date}</span>}
-              </label>
-              <input 
-                type="date" 
-                value={date}
-                onChange={(e) => {
-                  setDate(e.target.value);
-                  if (eventErrors.date) setEventErrors(prev => ({ ...prev, date: '' }));
-                }}
-                className={cn(
-                  "w-full bg-[#F0F2F5] border rounded px-4 py-2 text-[14px] outline-none focus:border-[#1976D2] transition-colors",
-                  eventErrors.date ? "border-[#D32F2F]" : "border-[#E4E6EB]"
-                )}
-              />
-            </div>
-            <div>
-              <label className="block text-[11px] font-bold uppercase text-[#606770] mb-1.5 flex justify-between">
-                City
-                {eventErrors.city && <span className="text-[#D32F2F] normal-case font-medium">{eventErrors.city}</span>}
-              </label>
-              <input 
-                type="text" 
-                value={city}
-                onChange={(e) => {
-                  setCity(e.target.value);
-                  if (eventErrors.city) setEventErrors(prev => ({ ...prev, city: '' }));
-                }}
-                className={cn(
-                  "w-full bg-[#F0F2F5] border rounded px-4 py-2 text-[14px] outline-none focus:border-[#1976D2] transition-colors",
-                  eventErrors.city ? "border-[#D32F2F]" : "border-[#E4E6EB]"
-                )}
-                placeholder="e.g. Los Angeles"
-              />
-            </div>
-            <div>
-              <label className="block text-[11px] font-bold uppercase text-[#606770] mb-1.5 flex justify-between">
-                Location
-                {eventErrors.location && <span className="text-[#D32F2F] normal-case font-medium">{eventErrors.location}</span>}
-              </label>
-              <input 
-                type="text" 
-                value={location}
-                onChange={(e) => {
-                  setLocation(e.target.value);
-                  if (eventErrors.location) setEventErrors(prev => ({ ...prev, location: '' }));
-                }}
-                className={cn(
-                  "w-full bg-[#F0F2F5] border rounded px-4 py-2 text-[14px] outline-none focus:border-[#1976D2] transition-colors",
-                  eventErrors.location ? "border-[#D32F2F]" : "border-[#E4E6EB]"
-                )}
-                placeholder="e.g. LA Convention Center"
-              />
-            </div>
-            <div>
-              <label className="block text-[11px] font-bold uppercase text-[#606770] mb-1.5 flex justify-between">
-                Timezone
-              </label>
-              <select 
-                value={timezone}
-                onChange={(e) => setTimezone(e.target.value)}
-                className="w-full bg-[#F0F2F5] border border-[#E4E6EB] rounded px-4 py-2 text-[14px] outline-none focus:border-[#1976D2]"
-              >
-                <option value="">Select Timezone</option>
-                <option value="America/New_York">Eastern Time (ET)</option>
-                <option value="America/Chicago">Central Time (CT)</option>
-                <option value="America/Denver">Mountain Time (MT)</option>
-                <option value="America/Los_Angeles">Pacific Time (PT)</option>
-                <option value="America/Anchorage">Alaska Time (AKT)</option>
-                <option value="Pacific/Honolulu">Hawaii-Aleutian Time (HAT)</option>
-              </select>
-            </div>
-            <div>
-              <label className="block text-[11px] font-bold uppercase text-[#606770] mb-1.5 flex justify-between">
-                Map URL
-              </label>
-              <input 
-                type="text" 
-                value={mapUrl}
-                onChange={(e) => setMapUrl(e.target.value)}
-                className="w-full bg-[#F0F2F5] border border-[#E4E6EB] rounded px-4 py-2 text-[14px] outline-none focus:border-[#1976D2]"
-                placeholder="https://..."
-              />
-            </div>
-            <div>
-              <label className="block text-[11px] font-bold uppercase text-[#606770] mb-1.5 flex justify-between">
-                Floor Plan URL
-              </label>
-              <div className="flex gap-2">
-                <input 
-                  type="text" 
-                  value={floorPlanUrl}
-                  onChange={(e) => setFloorPlanUrl(e.target.value)}
-                  className="flex-grow bg-[#F0F2F5] border border-[#E4E6EB] rounded px-4 py-2 text-[14px] outline-none focus:border-[#1976D2]"
-                  placeholder="Link to JPG/PNG floor plan"
-                />
-                <button 
-                  type="button" 
-                  onClick={() => {
-                    const url = prompt('Enter image URL for Floor Plan:');
-                    if (url) setFloorPlanUrl(url);
-                  }}
-                  className="bg-white border border-[#E4E6EB] px-3 rounded hover:bg-[#F0F2F5] transition-colors"
-                >
-                  <MapPin className="w-4 h-4 text-[#606770]" />
-                </button>
-              </div>
-            </div>
-          </div>
-          <div>
-            <label className="block text-[11px] font-bold uppercase text-[#606770] mb-1.5 flex justify-between">
-              Description
-              {eventErrors.description && <span className="text-[#D32F2F] normal-case font-medium">{eventErrors.description}</span>}
-            </label>
-            <textarea 
-              value={description}
-              onChange={(e) => {
-                setDescription(e.target.value);
-                if (eventErrors.description) setEventErrors(prev => ({ ...prev, description: '' }));
-              }}
-              rows={4}
-              className={cn(
-                "w-full bg-[#F0F2F5] border rounded px-4 py-2 text-[14px] outline-none focus:border-[#1976D2] resize-none transition-colors",
-                eventErrors.description ? "border-[#D32F2F]" : "border-[#E4E6EB]"
-              )}
-              placeholder="Tell attendees what to expect..."
-            />
-          </div>
-          <div className="pt-4 flex flex-wrap gap-3">
-            <button 
-              type="submit"
-              disabled={saving}
-              className="flex-grow md:flex-none px-8 py-3 bg-[#D32F2F] text-white font-bold rounded hover:bg-black transition-colors disabled:opacity-50"
-            >
-              <div className="flex items-center justify-center gap-2">
-                <Send className="w-4 h-4" />
-                {saving ? 'Processing...' : editingEventId ? 'Update & Launch' : 'Launch Expo Event'}
-              </div>
-            </button>
-            <button 
-              type="button"
-              onClick={handleSaveDraftEvent}
-              disabled={saving}
-              className="flex-grow md:flex-none px-6 py-3 bg-[#F0F2F5] text-[#1C1E21] font-bold rounded hover:bg-[#E4E6EB] transition-colors disabled:opacity-50 border border-[#E4E6EB]"
-            >
-              {editingEventId ? 'Save as Draft' : 'Save Draft'}
-            </button>
-            {editingEventId && (
-              <button 
-                type="button"
-                onClick={handleCancelEdit}
-                className="px-6 py-3 bg-white text-[#606770] font-bold rounded hover:bg-[#F0F2F5] border border-[#E4E6EB]"
-              >
-                Cancel Edit
-              </button>
-            )}
-          </div>
-        </form>
-      </div>
-
       {/* Existing Events List */}
       <div className="bg-white rounded-lg border border-[#E4E6EB] shadow-sm p-8">
-        <h2 className="text-xl font-bold text-[#1C1E21] mb-6 tracking-tight">Manage Existing Events</h2>
+        <div className="flex items-center justify-between mb-6">
+          <h2 className="text-xl font-bold text-[#1C1E21] tracking-tight">Manage Existing Events</h2>
+          <button 
+            onClick={() => {
+              handleCancelEdit(); // Clear fields
+              setIsEventModalOpen(true);
+            }}
+            className="px-4 py-2 bg-[#1976D2] text-white font-bold rounded hover:bg-[#1565C0] transition-colors"
+          >
+            + Create New Event
+          </button>
+        </div>
+        
+        {/* Event Creator Modal */}
+        <AnimatePresence>
+          {isEventModalOpen && (
+            <div className="fixed inset-0 bg-black/70 backdrop-blur-md z-[110] flex items-center justify-center p-4">
+              <motion.div 
+                initial={{ opacity: 0, scale: 0.95, y: 20 }}
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.95, y: 20 }}
+                className="bg-white rounded-3xl shadow-2xl w-full max-w-3xl overflow-hidden flex flex-col max-h-[90vh]"
+              >
+                <div className="flex items-center justify-between p-6 border-b border-[#E4E6EB] bg-[#F8F9FA]">
+                  <h2 className="text-2xl font-bold text-[#1C1E21] tracking-tight">{editingEventId ? 'Edit Expo Event' : 'Create New Expo Event'}</h2>
+                  <button 
+                    onClick={() => setIsEventModalOpen(false)}
+                    className="p-2 hover:bg-[#E4E6EB] rounded-full text-[#606770] transition-colors"
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
+                
+                <div className="overflow-y-auto p-8">
+                  <form onSubmit={handleCreateEvent} className="space-y-5">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                      <div>
+                        <label className="block text-[11px] font-bold uppercase text-[#606770] mb-1.5 flex justify-between">
+                          Event Name
+                          {eventErrors.name && <span className="text-[#D32F2F] normal-case font-medium">{eventErrors.name}</span>}
+                        </label>
+                        <input 
+                          type="text" 
+                          value={name}
+                          onChange={(e) => {
+                            setName(e.target.value);
+                            if (eventErrors.name) setEventErrors(prev => ({ ...prev, name: '' }));
+                          }}
+                          className={cn(
+                            "w-full bg-[#F0F2F5] border rounded px-4 py-2 text-[14px] outline-none focus:border-[#1976D2] transition-colors",
+                            eventErrors.name ? "border-[#D32F2F]" : "border-[#E4E6EB]"
+                          )}
+                          placeholder="e.g. California Black College Expo"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[11px] font-bold uppercase text-[#606770] mb-1.5 flex justify-between">
+                          Date
+                          {eventErrors.date && <span className="text-[#D32F2F] normal-case font-medium">{eventErrors.date}</span>}
+                        </label>
+                        <input 
+                          type="date" 
+                          value={date}
+                          onChange={(e) => {
+                            setDate(e.target.value);
+                            if (eventErrors.date) setEventErrors(prev => ({ ...prev, date: '' }));
+                          }}
+                          className={cn(
+                            "w-full bg-[#F0F2F5] border rounded px-4 py-2 text-[14px] outline-none focus:border-[#1976D2] transition-colors",
+                            eventErrors.date ? "border-[#D32F2F]" : "border-[#E4E6EB]"
+                          )}
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[11px] font-bold uppercase text-[#606770] mb-1.5 flex justify-between">
+                          City
+                          {eventErrors.city && <span className="text-[#D32F2F] normal-case font-medium">{eventErrors.city}</span>}
+                        </label>
+                        <input 
+                          type="text" 
+                          value={city}
+                          onChange={(e) => {
+                            setCity(e.target.value);
+                            if (eventErrors.city) setEventErrors(prev => ({ ...prev, city: '' }));
+                          }}
+                          className={cn(
+                            "w-full bg-[#F0F2F5] border rounded px-4 py-2 text-[14px] outline-none focus:border-[#1976D2] transition-colors",
+                            eventErrors.city ? "border-[#D32F2F]" : "border-[#E4E6EB]"
+                          )}
+                          placeholder="e.g. Los Angeles"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[11px] font-bold uppercase text-[#606770] mb-1.5 flex justify-between">
+                          Location
+                          {eventErrors.location && <span className="text-[#D32F2F] normal-case font-medium">{eventErrors.location}</span>}
+                        </label>
+                        <input 
+                          type="text" 
+                          value={location}
+                          onChange={(e) => {
+                            setLocation(e.target.value);
+                            if (eventErrors.location) setEventErrors(prev => ({ ...prev, location: '' }));
+                          }}
+                          className={cn(
+                            "w-full bg-[#F0F2F5] border rounded px-4 py-2 text-[14px] outline-none focus:border-[#1976D2] transition-colors",
+                            eventErrors.location ? "border-[#D32F2F]" : "border-[#E4E6EB]"
+                          )}
+                          placeholder="e.g. LA Convention Center"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[11px] font-bold uppercase text-[#606770] mb-1.5 flex justify-between">
+                          Timezone
+                        </label>
+                        <select 
+                          value={timezone}
+                          onChange={(e) => setTimezone(e.target.value)}
+                          className="w-full bg-[#F0F2F5] border border-[#E4E6EB] rounded px-4 py-2 text-[14px] outline-none focus:border-[#1976D2]"
+                        >
+                          <option value="">Select Timezone</option>
+                          <option value="America/New_York">Eastern Time (ET)</option>
+                          <option value="America/Chicago">Central Time (CT)</option>
+                          <option value="America/Denver">Mountain Time (MT)</option>
+                          <option value="America/Los_Angeles">Pacific Time (PT)</option>
+                          <option value="America/Anchorage">Alaska Time (AKT)</option>
+                          <option value="Pacific/Honolulu">Hawaii-Aleutian Time (HAT)</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-[11px] font-bold uppercase text-[#606770] mb-1.5 flex justify-between">
+                          Map URL
+                        </label>
+                        <input 
+                          type="text" 
+                          value={mapUrl}
+                          onChange={(e) => setMapUrl(e.target.value)}
+                          className="w-full bg-[#F0F2F5] border border-[#E4E6EB] rounded px-4 py-2 text-[14px] outline-none focus:border-[#1976D2]"
+                          placeholder="https://..."
+                        />
+                      </div>
+                      <div className="md:col-span-2">
+                        <label className="block text-[11px] font-bold uppercase text-[#606770] mb-1.5 flex justify-between">
+                          Floor Plan URL
+                        </label>
+                        <div className="flex gap-2">
+                          <input 
+                            type="text" 
+                            value={floorPlanUrl}
+                            onChange={(e) => setFloorPlanUrl(e.target.value)}
+                            className="flex-grow bg-[#F0F2F5] border border-[#E4E6EB] rounded px-4 py-2 text-[14px] outline-none focus:border-[#1976D2]"
+                            placeholder="Link to JPG/PNG floor plan"
+                          />
+                          <button 
+                            type="button" 
+                            onClick={() => {
+                              const url = prompt('Enter image URL for Floor Plan:');
+                              if (url) setFloorPlanUrl(url);
+                            }}
+                            className="bg-white border border-[#E4E6EB] px-3 rounded hover:bg-[#F0F2F5] transition-colors"
+                          >
+                            <MapPin className="w-4 h-4 text-[#606770]" />
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                    <div>
+                      <label className="block text-[11px] font-bold uppercase text-[#606770] mb-1.5 flex justify-between">
+                        Description
+                        {eventErrors.description && <span className="text-[#D32F2F] normal-case font-medium">{eventErrors.description}</span>}
+                      </label>
+                      <textarea 
+                        value={description}
+                        onChange={(e) => {
+                          setDescription(e.target.value);
+                          if (eventErrors.description) setEventErrors(prev => ({ ...prev, description: '' }));
+                        }}
+                        rows={4}
+                        className={cn(
+                          "w-full bg-[#F0F2F5] border rounded px-4 py-2 text-[14px] outline-none focus:border-[#1976D2] resize-none transition-colors",
+                          eventErrors.description ? "border-[#D32F2F]" : "border-[#E4E6EB]"
+                        )}
+                        placeholder="Tell attendees what to expect..."
+                      />
+                    </div>
+                    <div className="pt-4 flex flex-wrap gap-3">
+                      <button 
+                        type="submit"
+                        disabled={saving}
+                        className="flex-grow md:flex-none px-8 py-3 bg-[#D32F2F] text-white font-bold rounded hover:bg-black transition-colors disabled:opacity-50"
+                      >
+                        <div className="flex items-center justify-center gap-2">
+                          {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+                          {saving ? 'Processing...' : editingEventId ? 'Update & Launch' : 'Launch Expo Event'}
+                        </div>
+                      </button>
+                      <button 
+                        type="button"
+                        onClick={handleSaveDraftEvent}
+                        disabled={saving}
+                        className="flex-grow md:flex-none px-6 py-3 bg-[#F0F2F5] text-[#1C1E21] font-bold rounded hover:bg-[#E4E6EB] transition-colors disabled:opacity-50 border border-[#E4E6EB] flex items-center justify-center gap-2"
+                      >
+                        {saving && <Loader2 className="w-4 h-4 animate-spin" />}
+                        {editingEventId ? 'Save as Draft' : 'Save Draft'}
+                      </button>
+                    </div>
+                  </form>
+                </div>
+              </motion.div>
+            </div>
+          )}
+        </AnimatePresence>
+
         <div className="space-y-4">
           {events.length === 0 ? (
             <div className="text-center py-6 text-[#606770] italic text-[13px]">No events found to manage.</div>
@@ -3851,7 +3955,7 @@ const AdminEventManager = ({ events, initialEditEvent }: { events: ExpoEvent[], 
               className="w-full md:w-auto px-8 py-3 bg-[#1976D2] text-white font-bold rounded hover:bg-black transition-colors disabled:opacity-50"
             >
               <div className="flex items-center justify-center gap-2">
-                <Send className="w-4 h-4" />
+                {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
                 {saving ? 'Processing...' : editingSeminarId ? 'Update & Publish' : 'Publish Seminar'}
               </div>
             </button>
@@ -3859,8 +3963,9 @@ const AdminEventManager = ({ events, initialEditEvent }: { events: ExpoEvent[], 
               type="button"
               onClick={handleSaveDraftSeminar}
               disabled={saving}
-              className="w-full md:w-auto px-6 py-3 bg-[#F0F2F5] text-[#1C1E21] font-bold rounded hover:bg-[#E4E6EB] transition-colors disabled:opacity-50 border border-[#E4E6EB]"
+              className="w-full md:w-auto px-6 py-3 bg-[#F0F2F5] text-[#1C1E21] font-bold rounded hover:bg-[#E4E6EB] transition-colors disabled:opacity-50 border border-[#E4E6EB] flex items-center justify-center gap-2"
             >
+              {saving && <Loader2 className="w-4 h-4 animate-spin" />}
               {editingSeminarId ? 'Save as Draft' : 'Save Draft'}
             </button>
             {editingSeminarId && (
@@ -4034,37 +4139,95 @@ const AdminEventManager = ({ events, initialEditEvent }: { events: ExpoEvent[], 
             <button 
               type="submit"
               disabled={saving || !selectedEventId}
-              className="w-full md:w-auto px-8 py-3 bg-[#E65100] text-white font-bold rounded hover:bg-black transition-colors disabled:opacity-50 shadow-lg shadow-[#E65100]/20"
+              className="w-full md:w-auto px-8 py-3 bg-[#E65100] text-white font-bold rounded hover:bg-black transition-colors disabled:opacity-50 shadow-lg shadow-[#E65100]/20 flex items-center justify-center gap-2"
             >
+              {saving && <Loader2 className="w-4 h-4 animate-spin" />}
               {saving ? 'Processing...' : editingSponsorId ? 'Update Sponsor' : 'Add Sponsor to Highlights'}
             </button>
           </div>
         </form>
 
         {/* Existing Sponsors List */}
-        {selectedEventId && sponsorsForSelectedEvent.length > 0 && (
+        {selectedEventId && (
           <div className="mt-10 pt-8 border-t border-[#F0F2F5]">
-            <h4 className="text-[11px] font-bold uppercase text-[#606770] mb-4">Sponsors for Selected Event</h4>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-              {sponsorsForSelectedEvent.map(spon => (
-                <div key={spon.id} className="p-4 bg-[#F8F9FA] rounded-xl border border-[#E4E6EB] flex items-center gap-4">
-                   <div className="w-12 h-12 rounded bg-white p-1 border border-[#E4E6EB] shrink-0">
-                     <img src={spon.logoUrl} alt="" className="w-full h-full object-contain" referrerPolicy="no-referrer" />
-                   </div>
-                   <div className="flex-grow min-w-0">
-                     <div className="text-[13px] font-bold text-[#1C1E21] truncate">{spon.name}</div>
-                     <div className="text-[10px] text-[#E65100] font-bold uppercase tracking-wider">{spon.tier}</div>
-                     {spon.websiteUrl && (
-                       <div className="text-[10px] text-[#1976D2] truncate opacity-80 mt-0.5">{spon.websiteUrl}</div>
-                     )}
-                   </div>
-                   <div className="flex gap-1 shrink-0">
-                     <button onClick={() => handleEditSponsorInit(spon)} className="p-1.5 text-[#606770] hover:text-[#1976D2]"><Edit2 className="w-3.5 h-3.5" /></button>
-                     <button onClick={() => setDeletingSponsorId(spon.id)} className="p-1.5 text-[#606770] hover:text-[#D32F2F]"><Trash2 className="w-3.5 h-3.5" /></button>
-                   </div>
-                </div>
-              ))}
+            <div className="flex items-center justify-between mb-4">
+              <h4 className="text-[11px] font-bold uppercase text-[#606770]">Sponsors for Selected Event</h4>
+              {sponsorsForSelectedEvent.length > 0 && (
+                <label className="flex items-center gap-2 cursor-pointer group">
+                  <input 
+                    type="checkbox" 
+                    className="w-3 h-3 rounded border-[#E4E6EB] text-[#1976D2] focus:ring-[#1976D2]"
+                    checked={selectedSponsorIds.length === sponsorsForSelectedEvent.length && sponsorsForSelectedEvent.length > 0}
+                    onChange={(e) => {
+                      if (e.target.checked) {
+                        setSelectedSponsorIds(sponsorsForSelectedEvent.map(s => s.id));
+                      } else {
+                        setSelectedSponsorIds([]);
+                      }
+                    }}
+                  />
+                  <span className="text-[11px] font-bold text-[#606770] uppercase tracking-wider group-hover:text-[#1976D2] transition-colors">Select All</span>
+                </label>
+              )}
             </div>
+
+            {selectedSponsorIds.length > 0 && (
+              <div className="bg-[#FFEBEE] border border-[#FFCDD2] rounded-lg p-3 flex items-center justify-between mb-4">
+                <span className="text-[12px] font-bold text-[#D32F2F]">
+                  {selectedSponsorIds.length} sponsor{selectedSponsorIds.length !== 1 ? 's' : ''} selected
+                </span>
+                <button 
+                  onClick={handleBulkDeleteSponsors}
+                  disabled={saving}
+                  className="px-3 py-1 bg-white text-[#D32F2F] text-[11px] font-bold rounded-md border border-[#FFEBEE] hover:bg-[#D32F2F] hover:text-white transition-all flex items-center gap-1.5"
+                >
+                  <Trash2 className="w-3 h-3" />
+                  Delete Selected
+                </button>
+              </div>
+            )}
+
+            {loadingSponsors ? (
+              <div className="py-12 flex flex-col items-center justify-center text-[#606770] bg-[#F8F9FA] rounded-xl border border-dashed border-[#E4E6EB]">
+                <Loader2 className="w-8 h-8 animate-spin mb-2 opacity-20" />
+                <p className="text-[12px] font-bold uppercase tracking-widest">Fetching sponsors...</p>
+              </div>
+            ) : sponsorsForSelectedEvent.length === 0 ? (
+              <div className="py-6 text-center text-[12px] text-[#606770] italic">No sponsors added for this expo.</div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                {sponsorsForSelectedEvent.map(spon => (
+                  <div key={spon.id} className="p-4 bg-[#F8F9FA] rounded-xl border border-[#E4E6EB] flex items-center gap-4 group hover:border-[#BBDEFB]">
+                     <input 
+                       type="checkbox" 
+                       className="w-4 h-4 rounded border-[#E4E6EB] text-[#1976D2] focus:ring-[#1976D2] cursor-pointer"
+                       checked={selectedSponsorIds.includes(spon.id)}
+                       onChange={(e) => {
+                         if (e.target.checked) {
+                           setSelectedSponsorIds(prev => [...prev, spon.id]);
+                         } else {
+                           setSelectedSponsorIds(prev => prev.filter(id => id !== spon.id));
+                         }
+                       }}
+                     />
+                     <div className="w-12 h-12 rounded bg-white p-1 border border-[#E4E6EB] shrink-0">
+                       <img src={spon.logoUrl} alt="" className="w-full h-full object-contain" referrerPolicy="no-referrer" />
+                     </div>
+                     <div className="flex-grow min-w-0">
+                       <div className="text-[13px] font-bold text-[#1C1E21] truncate">{spon.name}</div>
+                       <div className="text-[10px] text-[#E65100] font-bold uppercase tracking-wider">{spon.tier}</div>
+                       {spon.websiteUrl && (
+                         <div className="text-[10px] text-[#1976D2] truncate opacity-80 mt-0.5">{spon.websiteUrl}</div>
+                       )}
+                     </div>
+                     <div className="flex gap-1 shrink-0">
+                       <button onClick={() => handleEditSponsorInit(spon)} className="p-1.5 text-[#606770] hover:text-[#1976D2]"><Edit2 className="w-3.5 h-3.5" /></button>
+                       <button onClick={() => setDeletingSponsorId(spon.id)} className="p-1.5 text-[#606770] hover:text-[#D32F2F]"><Trash2 className="w-3.5 h-3.5" /></button>
+                     </div>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -4155,42 +4318,52 @@ const AdminEventManager = ({ events, initialEditEvent }: { events: ExpoEvent[], 
             <button 
               type="submit"
               disabled={saving || !selectedEventId}
-              className="px-8 py-3 bg-[#1976D2] text-white font-bold rounded hover:bg-black transition-colors disabled:opacity-50 shadow-sm"
+              className="px-8 py-3 bg-[#1976D2] text-white font-bold rounded hover:bg-black transition-colors disabled:opacity-50 shadow-sm flex items-center justify-center gap-2"
             >
+              {saving && <Loader2 className="w-4 h-4 animate-spin" />}
               {saving ? 'Processing...' : 'Push Live Update'}
             </button>
           </div>
         </form>
 
         {/* Existing Updates List */}
-        {selectedEventId && updatesForSelectedEvent.length > 0 && (
+        {selectedEventId && (
           <div className="mt-10 pt-8 border-t border-[#F0F2F5]">
             <h4 className="text-[11px] font-bold uppercase text-[#606770] mb-4">Recent Updates for Selected Event</h4>
-            <div className="space-y-3">
-              {updatesForSelectedEvent.map(update => (
-                <div key={update.id} className="p-4 bg-[#F8F9FA] rounded-xl border border-[#E4E6EB] flex items-start gap-4">
-                   <div className="shrink-0 mt-0.5">
-                     {update.type === 'alert' && <AlertCircle className="w-4 h-4 text-[#D32F2F]" />}
-                     {update.type === 'warning' && <AlertTriangle className="w-4 h-4 text-[#F57F17]" />}
-                     {update.type === 'info' && <Info className="w-4 h-4 text-[#1976D2]" />}
-                   </div>
-                   <div className="flex-grow min-w-0">
-                     <div className="text-[13px] font-bold text-[#1C1E21] break-words">{update.message}</div>
-                     <div className="text-[10px] text-[#606770] font-bold uppercase tracking-wider mt-1 flex flex-wrap gap-2 items-center">
-                       <span>{format(new Date(update.createdAt), 'MMM d, h:mm a')}</span>
-                       {update.targetAudience && update.targetAudience !== 'all' && (
-                         <span className="bg-[#E4E6EB] px-1.5 py-0.5 rounded text-[#1C1E21]">
-                           Target: {update.targetAudience}
-                         </span>
-                       )}
+            {loadingUpdates ? (
+              <div className="py-12 flex flex-col items-center justify-center text-[#606770] bg-[#F8F9FA] rounded-xl border border-dashed border-[#E4E6EB]">
+                <Loader2 className="w-8 h-8 animate-spin mb-2 opacity-20" />
+                <p className="text-[12px] font-bold uppercase tracking-widest">Fetching updates...</p>
+              </div>
+            ) : updatesForSelectedEvent.length === 0 ? (
+              <div className="py-6 text-center text-[12px] text-[#606770] italic">No updates broadcasted for this expo.</div>
+            ) : (
+              <div className="space-y-3">
+                {updatesForSelectedEvent.map(update => (
+                  <div key={update.id} className="p-4 bg-[#F8F9FA] rounded-xl border border-[#E4E6EB] flex items-start gap-4">
+                     <div className="shrink-0 mt-0.5">
+                       {update.type === 'alert' && <AlertCircle className="w-4 h-4 text-[#D32F2F]" />}
+                       {update.type === 'warning' && <AlertTriangle className="w-4 h-4 text-[#F57F17]" />}
+                       {update.type === 'info' && <Info className="w-4 h-4 text-[#1976D2]" />}
                      </div>
-                   </div>
-                   <div className="flex gap-1 shrink-0">
-                     <button onClick={() => setDeletingUpdateId(update.id)} className="p-1.5 text-[#606770] hover:text-[#D32F2F]"><Trash2 className="w-3.5 h-3.5" /></button>
-                   </div>
-                </div>
-              ))}
-            </div>
+                     <div className="flex-grow min-w-0">
+                       <div className="text-[13px] font-bold text-[#1C1E21] break-words">{update.message}</div>
+                       <div className="text-[10px] text-[#606770] font-bold uppercase tracking-wider mt-1 flex flex-wrap gap-2 items-center">
+                         <span>{format(new Date(update.createdAt), 'MMM d, h:mm a')}</span>
+                         {update.targetAudience && update.targetAudience !== 'all' && (
+                           <span className="bg-[#E4E6EB] px-1.5 py-0.5 rounded text-[#1C1E21]">
+                             Target: {update.targetAudience}
+                           </span>
+                         )}
+                       </div>
+                     </div>
+                     <div className="flex gap-1 shrink-0">
+                       <button onClick={() => setDeletingUpdateId(update.id)} className="p-1.5 text-[#606770] hover:text-[#D32F2F]"><Trash2 className="w-3.5 h-3.5" /></button>
+                     </div>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         )}
       </div>
