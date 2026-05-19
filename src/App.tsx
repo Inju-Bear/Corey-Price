@@ -5025,13 +5025,16 @@ const ScholarshipTracker = () => {
   );
 };
 
-const Navbar = ({ onOpenNotifications }: { onOpenNotifications: () => void }) => {
+const Navbar = ({ onOpenNotifications, onGoHome }: { onOpenNotifications: () => void, onGoHome: () => void }) => {
   const { user, logout, notifications } = useContext(UserContext);
   const unreadCount = notifications.filter(n => !n.read).length;
 
   return (
     <header className="h-[70px] bg-white border border-[#E4E6EB] rounded-lg flex items-center justify-between px-5 mb-4 shadow-sm">
-      <div className="flex items-center gap-3">
+      <button 
+        onClick={onGoHome}
+        className="flex items-center gap-3 hover:opacity-80 transition-opacity text-left cursor-pointer bg-transparent border-none p-0 m-0"
+      >
         <img 
           src={LOGO_URL} 
           alt="NCRF Logo" 
@@ -5046,7 +5049,7 @@ const Navbar = ({ onOpenNotifications }: { onOpenNotifications: () => void }) =>
             Expo 2026
           </div>
         </div>
-      </div>
+      </button>
 
       {user && (
         <div className="flex items-center gap-5">
@@ -5873,7 +5876,7 @@ export default function App() {
         setAuthError('Popup blocked by browser. Please allow popups.');
       } else {
         console.error('Sign in failed', error);
-        setAuthError('Sign in failed. Try opening in a new tab.');
+        setAuthError('Sign in failed: ' + error.message);
       }
     }
   };
@@ -6012,15 +6015,18 @@ export default function App() {
           {user && (
             <aside className="w-[240px] bg-[#1A2233] text-white flex-shrink-0 flex flex-col p-5 h-screen sticky top-0">
               <div className="pb-6 border-b border-white/10 mb-6">
-                <div className="flex items-center gap-3 mb-6">
+                <button 
+                  onClick={() => { setSelectedEvent(null); setActiveView('dashboard'); setEventToEdit(null); }}
+                  className="flex items-center gap-3 mb-6 w-full text-left hover:opacity-80 transition-opacity cursor-pointer bg-transparent border-none p-0 m-0"
+                >
                   <div className="w-12 h-12 bg-white rounded-xl flex items-center justify-center p-1.5 shadow-lg border border-white/10">
                     <img src={LOGO_URL} alt="NCRF" className="w-full h-full object-contain" referrerPolicy="no-referrer" />
                   </div>
                   <div>
-                    <div className="text-[12px] font-black tracking-tight leading-none">NCRF EXPO</div>
-                    <div className="text-[9px] opacity-40 font-bold tracking-tighter">PORTAL SYSTEM</div>
+                    <div className="text-[12px] font-black tracking-tight leading-none text-white">NCRF EXPO</div>
+                    <div className="text-[9px] opacity-40 font-bold tracking-tighter text-white">PORTAL SYSTEM</div>
                   </div>
-                </div>
+                </button>
                 <div className="text-[10px] uppercase tracking-wider font-bold text-[#1976D2] mb-1">
                   {user.role} Portal
                 </div>
@@ -6424,7 +6430,10 @@ export default function App() {
                 )
               ) : (
                 <>
-                  <Navbar onOpenNotifications={() => setIsNotificationsOpen(true)} />
+                  <Navbar 
+                    onOpenNotifications={() => setIsNotificationsOpen(true)} 
+                    onGoHome={() => { setSelectedEvent(null); setActiveView('dashboard'); setEventToEdit(null); }}
+                  />
                   {activeView === 'settings' ? (
                     <ProfileSettings user={user} onUpdate={handleUpdateProfile} />
                   ) : activeView === 'scholarship' && user?.role === 'student' ? (
