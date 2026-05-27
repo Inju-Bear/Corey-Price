@@ -552,6 +552,96 @@ const StudentDigitalCard = ({ user }: { user: AppUser }) => {
   );
 };
 
+const ScannerModal = ({ isOpen, onClose, onScanSuccess, onScanError }: { isOpen: boolean, onClose: () => void, onScanSuccess: (data: any) => void, onScanError: (error: string) => void }) => {
+  const [internalError, setInternalError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!isOpen) {
+      setInternalError(null);
+      return;
+    }
+    const scanner = new Html5QrcodeScanner(
+      "reader-modal", 
+      { 
+        fps: 10, 
+        aspectRatio: window.innerHeight / window.innerWidth,
+        showTorchButtonIfSupported: true,
+        showZoomSliderIfSupported: true
+      }, 
+      /* verbose= */ false
+    );
+
+    scanner.render((decodedText) => {
+      try {
+        const data = JSON.parse(decodedText);
+        if (data.type === 'expo-lead-v1') {
+          scanner.clear();
+          setInternalError(null);
+          onScanSuccess(data);
+          onClose();
+        } else {
+          setInternalError('Invalid QR code type. Please scan an Expo Student Card.');
+          onScanError('Invalid QR code type. Please scan an Expo Student Card.');
+        }
+      } catch (err) {
+        setInternalError('Could not read QR code. Please try again.');
+        onScanError('Could not read QR code. Please try again.');
+      }
+    }, (err) => {
+      // Silent error
+    });
+
+    return () => {
+      scanner.clear().catch(error => console.error("Failed to clear html5QrcodeScanner", error));
+    };
+  }, [isOpen, onScanSuccess, onScanError, onClose]);
+
+  if (!isOpen) return null;
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black flex flex-col">
+      <div className="flex justify-between items-center w-full p-4 absolute top-0 z-[60] bg-gradient-to-b from-black/80 to-transparent">
+        <div className="text-white font-bold text-lg">Scan Student Card</div>
+        <button onClick={onClose} className="p-2 bg-white/20 rounded-full text-white hover:bg-white/30 transition shadow-lg backdrop-blur-sm">
+          <X className="w-6 h-6" />
+        </button>
+      </div>
+      <div className="relative flex-grow flex items-center justify-center overflow-hidden">
+        <div 
+          id="reader-modal" 
+          className="w-full h-full [&>img]:hidden [&_video]:object-cover [&_video]:w-full [&_video]:h-full [&>div]:border-none [&>div]:shadow-none [&_select]:bg-black/50 [&_select]:text-white [&_select]:border-white/30 [&_select]:rounded-lg [&_select]:p-2 [&_button]:bg-[#1976D2] [&_button]:text-white [&_button]:border-none [&_button]:rounded-lg [&_button]:px-4 [&_button]:py-2 [&_button]:font-bold [&_button]:mt-2"
+        ></div>
+        
+        {/* Custom Overlay */}
+        <div className="absolute inset-0 pointer-events-none flex flex-col items-center justify-center">
+          <div className="w-64 h-64 border-2 border-white/50 rounded-3xl relative">
+            {/* Corners */}
+            <div className="w-8 h-8 rounded-tl-2xl border-t-4 border-l-4 border-white absolute -top-1 -left-1"></div>
+            <div className="w-8 h-8 rounded-tr-2xl border-t-4 border-r-4 border-white absolute -top-1 -right-1"></div>
+            <div className="w-8 h-8 rounded-bl-2xl border-b-4 border-l-4 border-white absolute -bottom-1 -left-1"></div>
+            <div className="w-8 h-8 rounded-br-2xl border-b-4 border-r-4 border-white absolute -bottom-1 -right-1"></div>
+            
+            {/* Scan Line Animation */}
+            <div className="w-full h-0.5 bg-[#1976D2] absolute top-1/2 left-0 shadow-[0_0_8px_2px_rgba(25,118,210,0.5)] animate-pulse"></div>
+          </div>
+        </div>
+      </div>
+      
+      {internalError && (
+        <div className="absolute bottom-24 w-full px-8 z-[60]">
+          <div className="bg-[#D32F2F] text-white text-[13px] font-bold p-3 rounded-lg text-center shadow-lg border border-red-500">
+            {internalError}
+          </div>
+        </div>
+      )}
+      
+      <div className="absolute bottom-10 w-full text-center text-white text-[15px] font-medium px-8 drop-shadow-md z-[60]">
+        Position the QR code within the frame to capture automatically
+      </div>
+    </div>
+  );
+};
+
 const LeadScanner = ({ user, events }: { user: AppUser, events: ExpoEvent[] }) => {
   const [scanResult, setScanResult] = useState<any | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -560,6 +650,7 @@ const LeadScanner = ({ user, events }: { user: AppUser, events: ExpoEvent[] }) =
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
   const [showSuccess, setShowSuccess] = useState(false);
   const [successName, setSuccessName] = useState('');
+  const [isScannerModalOpen, setIsScannerModalOpen] = useState(false);
 
   const hasAccess = selectedEventId ? ((user.unlockedEvents || []).includes(selectedEventId) || (user.unlockedEvents || []).includes('all_events')) : false;
 
@@ -589,37 +680,6 @@ const LeadScanner = ({ user, events }: { user: AppUser, events: ExpoEvent[] }) =
       alert('Could not connect to payment server.');
     }
   };
-
-  useEffect(() => {
-    // Only mount scanner if unlocked
-    if (!hasAccess || scanResult || showSuccess) return;
-
-    const scanner = new Html5QrcodeScanner(
-      "reader", 
-      { fps: 10, qrbox: { width: 250, height: 250 } }, 
-      /* verbose= */ false
-    );
-
-    scanner.render((decodedText) => {
-      try {
-        const data = JSON.parse(decodedText);
-        if (data.type === 'expo-lead-v1') {
-          setScanResult(data);
-          scanner.clear();
-        } else {
-          setError('Invalid QR code type. Please scan an Expo Student Card.');
-        }
-      } catch (err) {
-        setError('Could not read QR code. Please try again.');
-      }
-    }, (err) => {
-      // Silent error during scanning
-    });
-
-    return () => {
-      scanner.clear().catch(error => console.error("Failed to clear html5QrcodeScanner", error));
-    };
-  }, [hasAccess, scanResult, showSuccess]);
 
   const handleSaveLead = async () => {
     if (!scanResult) return;
@@ -736,12 +796,25 @@ const LeadScanner = ({ user, events }: { user: AppUser, events: ExpoEvent[] }) =
           </h2>
           <p className="text-[#606770] text-sm mb-6">Scan a student's digital QR card to capture their contact information.</p>
           
-          <div id="reader" className="w-full max-w-sm mx-auto overflow-hidden rounded-xl border-4 border-[#F0F2F5]"></div>
+          <button 
+            onClick={() => setIsScannerModalOpen(true)}
+            className="w-full max-w-xs mx-auto py-4 bg-[#1976D2] text-white font-bold rounded-xl hover:bg-[#1565C0] transition-all shadow-md hover:shadow-lg flex items-center justify-center gap-2"
+          >
+            <ScanLine className="w-5 h-5" />
+            Open Camera Scanner
+          </button>
+          
+          <ScannerModal
+            isOpen={isScannerModalOpen}
+            onClose={() => setIsScannerModalOpen(false)}
+            onScanSuccess={(data) => setScanResult(data)}
+            onScanError={(err) => setError(err)}
+          />
           
           {error && (
             <div className="mt-4 p-4 bg-[#FFF5F5] text-[#D32F2F] rounded-lg text-sm border border-[#FFEBEE]">
               {error}
-              <button onClick={() => setError(null)} className="ml-2 underline font-bold uppercase text-[10px]">Retry</button>
+              <button onClick={() => setError(null)} className="ml-2 underline font-bold uppercase text-[10px]">Clear</button>
             </div>
           )}
         </div>
@@ -890,10 +963,30 @@ const LeadsList = ({ user }: { user: AppUser }) => {
     document.body.removeChild(link);
   };
 
+  const totalLeads = filteredAndSortedLeads.length;
+  const uniqueSchools = new Set(filteredAndSortedLeads.map(l => l.studentSchool).filter(Boolean)).size;
+  const athleteCount = filteredAndSortedLeads.filter(l => l.studentIsAthlete).length;
+
   if (loading) return <div className="p-20 flex justify-center"><Loader2 className="w-8 h-8 animate-spin text-[#D32F2F]" /></div>;
 
   return (
     <div className="space-y-6">
+      {/* Summary Card */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div className="bg-white p-6 rounded-2xl shadow-sm border border-[#E4E6EB] flex flex-col justify-center">
+          <div className="text-[12px] font-bold text-[#606770] uppercase mb-1">Total Scans</div>
+          <div className="text-3xl font-bold text-[#1C1E21]">{totalLeads}</div>
+        </div>
+        <div className="bg-white p-6 rounded-2xl shadow-sm border border-[#E4E6EB] flex flex-col justify-center">
+          <div className="text-[12px] font-bold text-[#606770] uppercase mb-1">Unique Schools</div>
+          <div className="text-3xl font-bold text-[#1976D2]">{uniqueSchools}</div>
+        </div>
+        <div className="bg-white p-6 rounded-2xl shadow-sm border border-[#E4E6EB] flex flex-col justify-center">
+          <div className="text-[12px] font-bold text-[#606770] uppercase mb-1">Athletes Captured</div>
+          <div className="text-3xl font-bold text-[#E65100]">{athleteCount}</div>
+        </div>
+      </div>
+
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
           <h2 className="text-xl font-bold text-[#1C1E21]">Captured Leads</h2>
