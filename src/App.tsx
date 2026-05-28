@@ -129,6 +129,23 @@ function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
+function sanitizeUrl(url: string | undefined): string {
+  if (!url) return '';
+  const trimmed = url.trim();
+  if (
+    trimmed.startsWith('http://') || 
+    trimmed.startsWith('https://') || 
+    trimmed.startsWith('/') || 
+    trimmed.startsWith('blob:')
+  ) {
+    return trimmed;
+  }
+  if (/^[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/.test(trimmed)) {
+    return `https://${trimmed}`;
+  }
+  return '';
+}
+
 const isWorkshopHappeningNow = (timeStr: string) => {
   const now = new Date();
   const match = timeStr.match(/(\d+):(\d+) (AM|PM)/);
@@ -997,14 +1014,14 @@ const LeadsList = ({ user }: { user: AppUser }) => {
               {lead.studentLinkedin && (
                 <div className="flex items-center gap-2 text-[12px] text-[#1C1E21] mb-2">
                   <Linkedin className="w-3.5 h-3.5 text-[#606770]" />
-                  <a href={lead.studentLinkedin} target="_blank" rel="noopener noreferrer" className={cn("hover:underline", lead.studentPreferredContact === 'linkedin' && "font-bold text-[#1976D2]")}>
+                  <a href={sanitizeUrl(lead.studentLinkedin)} target="_blank" rel="noopener noreferrer" className={cn("hover:underline", lead.studentPreferredContact === 'linkedin' && "font-bold text-[#1976D2]")}>
                     View LinkedIn
                   </a>
                 </div>
               )}
               {lead.studentResumeUrl && (
                 <a
-                  href={lead.studentResumeUrl}
+                  href={sanitizeUrl(lead.studentResumeUrl)}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="flex items-center gap-2 text-[12px] text-[#1976D2] font-bold hover:underline"
@@ -1997,7 +2014,7 @@ const EventDetails = ({ event, onBack, onEdit }: { event: ExpoEvent, onBack: () 
               </div>
               {event.mapUrl ? (
                 <a
-                  href={event.mapUrl}
+                  href={sanitizeUrl(event.mapUrl)}
                   target="_blank"
                   rel="noopener noreferrer"
                   download={`HallMap_${event.city}.pdf`}
@@ -2443,7 +2460,7 @@ const ProfileSettings = ({ user, onUpdate }: { user: AppUser, onUpdate: (data: P
                     {resumeUrl && (
                       <div className="mt-2 text-[12px] flex items-center gap-2">
                         <span className="text-[#606770]">Current Resume:</span>
-                        <a href={resumeUrl} target="_blank" rel="noopener noreferrer" className="text-[#1976D2] hover:underline font-medium select-all truncate max-w-[200px] md:max-w-md inline-block align-bottom">{resumeUrl}</a>
+                        <a href={sanitizeUrl(resumeUrl)} target="_blank" rel="noopener noreferrer" className="text-[#1976D2] hover:underline font-medium select-all truncate max-w-[200px] md:max-w-md inline-block align-bottom">{resumeUrl}</a>
                       </div>
                     )}
                     <p className="text-[10px] text-[#606770] mt-1 italic">Link a public PDF of your resume, or upload a new one for recruiters to view.</p>
@@ -4414,7 +4431,7 @@ const SponsorSection = ({ sponsors, loading }: { sponsors: Sponsor[], loading: b
             {tiers.platinum.map(s => (
               <a
                 key={s.id}
-                href={s.websiteUrl || '#'}
+                href={s.websiteUrl ? sanitizeUrl(s.websiteUrl) : '#'}
                 target={s.websiteUrl ? "_blank" : undefined}
                 rel={s.websiteUrl ? "noopener noreferrer" : undefined}
                 className="group relative"
@@ -4441,7 +4458,7 @@ const SponsorSection = ({ sponsors, loading }: { sponsors: Sponsor[], loading: b
             {[...tiers.gold, ...tiers.silver, ...tiers.bronze].map(s => (
               <a
                 key={s.id}
-                href={s.websiteUrl || '#'}
+                href={s.websiteUrl ? sanitizeUrl(s.websiteUrl) : '#'}
                 target={s.websiteUrl ? "_blank" : undefined}
                 rel={s.websiteUrl ? "noopener noreferrer" : undefined}
                 className="bg-white border border-[#E4E6EB] rounded-xl p-5 flex flex-col items-center justify-center gap-3 hover:shadow-lg transition-all group hover:-translate-y-1"
@@ -4471,7 +4488,7 @@ const SponsorSection = ({ sponsors, loading }: { sponsors: Sponsor[], loading: b
             {tiers.exhibitor.map(s => (
               <a
                 key={s.id}
-                href={s.websiteUrl || '#'}
+                href={s.websiteUrl ? sanitizeUrl(s.websiteUrl) : '#'}
                 target={s.websiteUrl ? "_blank" : undefined}
                 rel={s.websiteUrl ? "noopener noreferrer" : undefined}
                 className="px-4 py-3 bg-[#F8F9FA] border border-[#E4E6EB] rounded-2xl flex flex-col items-center text-center hover:bg-white hover:border-[#1976D2] transition-all hover:shadow-md min-w-[120px]"
