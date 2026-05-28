@@ -92,6 +92,7 @@ import {
   Eye,
   EyeOff,
   Upload,
+  WifiOff,
   X
 } from 'lucide-react';
 import { 
@@ -114,6 +115,7 @@ import { QRCodeCanvas } from 'qrcode.react';
 import { Html5QrcodeScanner } from 'html5-qrcode';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell, PieChart, Pie } from 'recharts';
 
 // --- Leaflet Icon Fix ---
 const icon = L.icon({
@@ -651,8 +653,50 @@ const LeadScanner = ({ user, events }: { user: AppUser, events: ExpoEvent[] }) =
   const [showSuccess, setShowSuccess] = useState(false);
   const [successName, setSuccessName] = useState('');
   const [isScannerModalOpen, setIsScannerModalOpen] = useState(false);
+  const [offlineLeadsCount, setOfflineLeadsCount] = useState(0);
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [syncError, setSyncError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const updateOfflineCount = () => {
+      const offlineLeads = JSON.parse(localStorage.getItem('offlineLeads') || '[]');
+      setOfflineLeadsCount(offlineLeads.length);
+    };
+    updateOfflineCount();
+    window.addEventListener('online', updateOfflineCount);
+    return () => window.removeEventListener('online', updateOfflineCount);
+  }, [showSuccess]);
 
   const hasAccess = selectedEventId ? ((user.unlockedEvents || []).includes(selectedEventId) || (user.unlockedEvents || []).includes('all_events')) : false;
+
+  const syncOfflineLeads = async () => {
+    const offlineLeads = JSON.parse(localStorage.getItem('offlineLeads') || '[]');
+    if (offlineLeads.length === 0) return;
+    
+    setIsSyncing(true);
+    setSyncError(null);
+    let successCount = 0;
+    
+    try {
+      for (const lead of offlineLeads) {
+        const { _offlineId, ...leadData } = lead;
+        await addDoc(collection(db, 'leads'), leadData);
+        successCount++;
+      }
+      localStorage.removeItem('offlineLeads');
+      setOfflineLeadsCount(0);
+      alert(`Successfully synced ${successCount} leads!`);
+    } catch (err: any) {
+      console.error('Error syncing offline leads:', err);
+      // Keep remaining unsigned leads in local storage
+      const remainingLeads = offlineLeads.slice(successCount);
+      localStorage.setItem('offlineLeads', JSON.stringify(remainingLeads));
+      setOfflineLeadsCount(remainingLeads.length);
+      setSyncError('Network error while syncing. Try again when connectivity improves.');
+    } finally {
+      setIsSyncing(false);
+    }
+  };
 
   const handleCheckout = async (mode: 'single' | 'all') => {
     if (!selectedEventId) return;
@@ -707,12 +751,35 @@ const LeadScanner = ({ user, events }: { user: AppUser, events: ExpoEvent[] }) =
         scannedAt: new Date().toISOString()
       };
 
+      if (!navigator.onLine) {
+        const offlineLeads = JSON.parse(localStorage.getItem('offlineLeads') || '[]');
+        const newOfflineLead = { ...leadData, _offlineId: Date.now().toString() };
+        localStorage.setItem('offlineLeads', JSON.stringify([...offlineLeads, newOfflineLead]));
+        setOfflineLeadsCount(offlineLeads.length + 1);
+        setSuccessName(scanResult.name + ' (Saved Offline)');
+        setShowSuccess(true);
+        setScanResult(null);
+        setNotes('');
+        return;
+      }
+      
       await addDoc(collection(db, 'leads'), leadData);
       setSuccessName(scanResult.name);
       setShowSuccess(true);
       setScanResult(null);
       setNotes('');
-    } catch (err) {
+    } catch (err: any) {
+      if (err.message?.includes('network') || err.code === 'unavailable' || !navigator.onLine) {
+        const offlineLeads = JSON.parse(localStorage.getItem('offlineLeads') || '[]');
+        const newOfflineLead = { ...leadData, _offlineId: Date.now().toString() };
+        localStorage.setItem('offlineLeads', JSON.stringify([...offlineLeads, newOfflineLead]));
+        setOfflineLeadsCount(offlineLeads.length + 1);
+        setSuccessName(scanResult.name + ' (Saved Offline)');
+        setShowSuccess(true);
+        setScanResult(null);
+        setNotes('');
+        return;
+      }
       handleFirestoreError(err, OperationType.CREATE, 'leads');
     } finally {
       setSaving(false);
@@ -721,6 +788,33 @@ const LeadScanner = ({ user, events }: { user: AppUser, events: ExpoEvent[] }) =
 
   return (
     <div className="max-w-2xl mx-auto space-y-6">
+      {offlineLeadsCount > 0 && (
+        <div className="bg-[#FFF3E0] rounded-2xl shadow-sm border border-[#FFE082] p-4 flex flex-col sm:flex-row items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 bg-[#FFCC80] rounded-full flex items-center justify-center text-[#E65100]">
+              <WifiOff className="w-5 h-5" />
+            </div>
+            <div>
+              <h3 className="font-bold text-[#E65100]">Offline Leads Pending</h3>
+              <p className="text-[12px] text-[#E65100]/80">You have {offlineLeadsCount} lead{offlineLeadsCount === 1 ? '' : 's'} saved temporarily. Connect to the network to sync them.</p>
+            </div>
+          </div>
+          <button 
+            onClick={syncOfflineLeads}
+            disabled={isSyncing || !navigator.onLine}
+            className="w-full sm:w-auto px-4 py-2 bg-[#E65100] text-white font-bold rounded-lg hover:bg-[#F57C00] transition-colors disabled:opacity-50 whitespace-nowrap"
+          >
+            {isSyncing ? 'Syncing...' : 'Sync Now'}
+          </button>
+        </div>
+      )}
+      
+      {syncError && (
+        <div className="bg-[#FFF5F5] rounded-lg p-3 text-sm text-[#D32F2F] border border-[#FFEBEE]">
+          {syncError}
+        </div>
+      )}
+
       <div className="bg-white rounded-2xl shadow-sm border border-[#E4E6EB] p-6">
         <label className="block text-[12px] font-bold text-[#606770] uppercase mb-2">Select Event to Scan For</label>
         <select 
@@ -887,12 +981,157 @@ const LeadScanner = ({ user, events }: { user: AppUser, events: ExpoEvent[] }) =
   );
 };
 
+const LeadDetailModal = ({ lead, onClose }: { lead: Lead | null, onClose: () => void }) => {
+  if (!lead) return null;
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex p-4 items-center justify-center pointer-events-auto">
+      <div className="bg-white rounded-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto shadow-2xl relative border border-[#E4E6EB]">
+        <div className="sticky top-0 bg-white/90 backdrop-blur-md z-10 border-b border-[#E4E6EB] px-6 py-4 flex justify-between items-center">
+          <h2 className="text-xl font-bold text-[#1C1E21]">Lead Profile</h2>
+          <button onClick={onClose} className="p-2 hover:bg-[#F0F2F5] rounded-full text-[#606770] transition-colors">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+        
+        <div className="p-6 space-y-8">
+          {/* Header Profile Section */}
+          <div className="flex flex-col sm:flex-row items-start gap-6">
+            <div className="w-24 h-24 bg-[#EEF2FF] rounded-2xl flex items-center justify-center text-[#4F46E5] text-3xl font-bold overflow-hidden border border-[#E4E6EB] shrink-0">
+              {lead.studentPhotoUrl ? (
+                <img src={lead.studentPhotoUrl} alt="" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+              ) : (
+                lead.studentName[0]
+              )}
+            </div>
+            <div className="space-y-1">
+              <h1 className="text-2xl font-bold text-[#1C1E21]">{lead.studentName}</h1>
+              <div className="text-[14px] text-[#606770]">{lead.studentSchool} {lead.studentGradYear && <span className="font-medium text-[#1976D2]">• Class of {lead.studentGradYear}</span>}</div>
+              <div className="pt-2 flex flex-wrap gap-2">
+                 {lead.studentMajor && (
+                   <span className="px-2.5 py-1 bg-[#F0F2F5] text-[#1C1E21] text-[11px] font-bold rounded-lg border border-[#E4E6EB]">
+                     {lead.studentMajor}
+                   </span>
+                 )}
+                 {lead.studentIsAthlete && (
+                   <span className="px-2.5 py-1 bg-[#E8F5E9] text-[#2E7D32] text-[11px] font-bold rounded-lg border border-[#2E7D32]/20">
+                     Athlete ({lead.studentSport || 'Unknown'})
+                   </span>
+                 )}
+                 {lead.studentWorkAuth && (
+                   <span className={cn(
+                     "px-2.5 py-1 text-[11px] font-bold rounded-lg border",
+                     lead.studentWorkAuth === 'authorized' ? "bg-[#E8F5E9] text-[#2E7D32] border-[#2E7D32]/20" : "bg-[#FFF3E0] text-[#E65100] border-[#E65100]/20"
+                   )}>
+                     {lead.studentWorkAuth === 'authorized' ? 'Work Authorized' : 'Needs Sponsorship'}
+                   </span>
+                 )}
+              </div>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            {/* Contact Info */}
+            <div className="bg-[#F8F9FA] rounded-xl p-5 border border-[#E4E6EB] space-y-4">
+               <h3 className="text-[11px] font-bold text-[#606770] uppercase tracking-wider">Contact Information</h3>
+               
+               <div className="space-y-3">
+                 <div className="flex items-start gap-3 text-[13px] text-[#1C1E21]">
+                   <Mail className="w-4 h-4 text-[#606770] mt-0.5 shrink-0" />
+                   <div>
+                     <div className={cn("break-all", lead.studentPreferredContact === 'email' && "font-bold text-[#1976D2]")}>
+                       {lead.studentEmail}
+                     </div>
+                     {lead.studentPreferredContact === 'email' && <div className="text-[10px] text-[#1976D2] uppercase font-bold mt-0.5">Preferred Contact</div>}
+                   </div>
+                 </div>
+                 
+                 {lead.studentPhone && (
+                   <div className="flex items-start gap-3 text-[13px] text-[#1C1E21]">
+                     <Phone className="w-4 h-4 text-[#606770] mt-0.5 shrink-0" />
+                     <div>
+                       <div className={cn(lead.studentPreferredContact === 'phone' && "font-bold text-[#1976D2]")}>
+                         {lead.studentPhone}
+                       </div>
+                       {lead.studentPreferredContact === 'phone' && <div className="text-[10px] text-[#1976D2] uppercase font-bold mt-0.5">Preferred Contact</div>}
+                     </div>
+                   </div>
+                 )}
+                 
+                 {lead.studentLinkedin && (
+                   <div className="flex items-start gap-3 text-[13px] text-[#1C1E21]">
+                     <Linkedin className="w-4 h-4 text-[#606770] mt-0.5 shrink-0" />
+                     <a href={lead.studentLinkedin} target="_blank" rel="noopener noreferrer" className="text-[#1976D2] hover:underline break-all">
+                       {lead.studentLinkedin}
+                     </a>
+                   </div>
+                 )}
+               </div>
+            </div>
+
+            {/* Application Links */}
+            <div className="bg-[#F8F9FA] rounded-xl p-5 border border-[#E4E6EB] space-y-4">
+              <h3 className="text-[11px] font-bold text-[#606770] uppercase tracking-wider">Professional Application</h3>
+              <div className="space-y-3">
+                {lead.studentResumeUrl ? (
+                  <a href={lead.studentResumeUrl} target="_blank" rel="noopener noreferrer" className="flex items-center gap-2 p-3 bg-white border border-[#E4E6EB] rounded-lg hover:border-[#1976D2] hover:shadow-sm transition-all group">
+                    <FileText className="w-4 h-4 text-[#606770] group-hover:text-[#1976D2]" />
+                    <span className="text-[13px] font-bold text-[#1C1E21] group-hover:text-[#1976D2]">View Resume Document</span>
+                    <ExternalLink className="w-3.5 h-3.5 text-[#606770] ml-auto group-hover:text-[#1976D2]" />
+                  </a>
+                ) : (
+                  <div className="p-3 bg-white border border-[#E4E6EB] border-dashed rounded-lg text-center text-[#606770] text-[12px]">
+                    No resume provided
+                  </div>
+                )}
+                
+                <div className="pt-2">
+                   <div className="text-[11px] font-bold text-[#606770] uppercase mb-2">Interests</div>
+                   <div className="flex flex-wrap gap-1.5">
+                     {lead.studentInterests && lead.studentInterests.length > 0 ? lead.studentInterests.map(interest => (
+                       <span key={interest} className="px-2 py-1 bg-white border border-[#E4E6EB] text-[#1C1E21] text-[11px] rounded-md">
+                         {interest}
+                       </span>
+                     )) : (
+                       <span className="text-[12px] text-[#606770] italic">Not specified</span>
+                     )}
+                   </div>
+                </div>
+              </div>
+            </div>
+          </div>
+          
+          {/* Internal Notes */}
+          <div className="bg-[#FFF8E1] rounded-xl p-5 border border-[#FFE082]">
+            <h3 className="text-[11px] font-bold text-[#F57F17] uppercase tracking-wider flex items-center gap-2 mb-3">
+              <MessageSquare className="w-3.5 h-3.5" />
+              Recruiter Notes
+            </h3>
+            {lead.notes ? (
+              <p className="text-[13px] text-[#424242] whitespace-pre-wrap leading-relaxed">{lead.notes}</p>
+            ) : (
+              <p className="text-[12px] text-[#9E9E9E] italic">No notes recorded during scan.</p>
+            )}
+            
+            <div className="mt-4 pt-4 border-t border-[#FFE082]/50 text-[10px] text-[#757575] flex justify-between items-center">
+              <span>Scanned on {format(new Date(lead.scannedAt), 'MMMM d, yyyy ')} at {format(new Date(lead.scannedAt), 'h:mm a')}</span>
+              <span>Event ID: {lead.eventId.slice(0, 8)}...</span>
+            </div>
+          </div>
+          
+        </div>
+      </div>
+    </div>
+  );
+};
+
 const LeadsList = ({ user }: { user: AppUser }) => {
   const [leads, setLeads] = useState<Lead[]>([]);
   const [loading, setLoading] = useState(true);
   const [sortField, setSortField] = useState<'scannedAt' | 'studentName' | 'studentSchool'>('scannedAt');
   const [sortOrder, setSortOrder] = useState<'desc' | 'asc'>('desc');
   const [recruiterFilter, setRecruiterFilter] = useState<string>('all');
+  const [selectedLead, setSelectedLead] = useState<Lead | null>(null);
 
   useEffect(() => {
     const q = user.role === 'admin' 
@@ -967,6 +1206,29 @@ const LeadsList = ({ user }: { user: AppUser }) => {
   const uniqueSchools = new Set(filteredAndSortedLeads.map(l => l.studentSchool).filter(Boolean)).size;
   const athleteCount = filteredAndSortedLeads.filter(l => l.studentIsAthlete).length;
 
+  const schoolCounts = filteredAndSortedLeads.reduce((acc, lead) => {
+    const school = lead.studentSchool || 'Unknown';
+    acc[school] = (acc[school] || 0) + 1;
+    return acc;
+  }, {} as Record<string, number>);
+
+  const schoolChartData = Object.entries(schoolCounts)
+    .map(([name, count]) => ({ name, count }))
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 5); // Top 5 schools
+
+  const gradYearCounts = filteredAndSortedLeads.reduce((acc, lead) => {
+    const year = lead.studentGradYear || 'Unknown';
+    acc[year] = (acc[year] || 0) + 1;
+    return acc;
+  }, {} as Record<string, number>);
+
+  const gradYearChartData = Object.entries(gradYearCounts)
+    .map(([name, value]) => ({ name, value }))
+    .sort((a, b) => b.value - a.value);
+
+  const COLORS = ['#1976D2', '#D32F2F', '#F57F17', '#388E3C', '#7B1FA2', '#0288D1'];
+
   if (loading) return <div className="p-20 flex justify-center"><Loader2 className="w-8 h-8 animate-spin text-[#D32F2F]" /></div>;
 
   return (
@@ -984,6 +1246,53 @@ const LeadsList = ({ user }: { user: AppUser }) => {
         <div className="bg-white p-6 rounded-2xl shadow-sm border border-[#E4E6EB] flex flex-col justify-center">
           <div className="text-[12px] font-bold text-[#606770] uppercase mb-1">Athletes Captured</div>
           <div className="text-3xl font-bold text-[#E65100]">{athleteCount}</div>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div className="bg-white p-6 rounded-2xl shadow-sm border border-[#E4E6EB]">
+          <h3 className="text-[12px] font-bold text-[#606770] uppercase mb-4">Top 5 Schools Represented</h3>
+          <div className="h-64 w-full">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={schoolChartData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#F0F2F5" />
+                <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fontSize: 10, fill: '#606770' }} />
+                <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 10, fill: '#606770' }} allowDecimals={false} />
+                <Tooltip cursor={{ fill: '#F8F9FA' }} contentStyle={{ borderRadius: '8px', border: '1px solid #E4E6EB', fontSize: '12px' }} />
+                <Bar dataKey="count" fill="#1976D2" radius={[4, 4, 0, 0]} maxBarSize={40} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+
+        <div className="bg-white p-6 rounded-2xl shadow-sm border border-[#E4E6EB]">
+          <h3 className="text-[12px] font-bold text-[#606770] uppercase mb-4">Class Year Breakdown</h3>
+          <div className="h-64 w-full flex items-center justify-center">
+            {gradYearChartData.length > 0 ? (
+              <ResponsiveContainer width="100%" height="100%">
+                <PieChart>
+                  <Pie
+                    data={gradYearChartData}
+                    cx="50%"
+                    cy="50%"
+                    innerRadius={60}
+                    outerRadius={80}
+                    paddingAngle={2}
+                    dataKey="value"
+                    label={({ name, percent }) => `${name} (${(percent * 100).toFixed(0)}%)`}
+                    labelLine={false}
+                  >
+                    {gradYearChartData.map((entry, index) => (
+                      <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                    ))}
+                  </Pie>
+                  <Tooltip contentStyle={{ borderRadius: '8px', border: '1px solid #E4E6EB', fontSize: '12px' }} />
+                </PieChart>
+              </ResponsiveContainer>
+            ) : (
+              <div className="text-[12px] text-[#606770] italic">No graduation year data available</div>
+            )}
+          </div>
         </div>
       </div>
 
@@ -1035,7 +1344,11 @@ const LeadsList = ({ user }: { user: AppUser }) => {
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         {filteredAndSortedLeads.map(lead => (
-          <div key={lead.id} className="bg-white p-5 rounded-2xl shadow-sm border border-[#E4E6EB] hover:shadow-md transition-all group">
+          <div 
+            key={lead.id} 
+            onClick={() => setSelectedLead(lead)}
+            className="bg-white p-5 rounded-2xl shadow-sm border border-[#E4E6EB] hover:shadow-md transition-all group cursor-pointer"
+          >
             <div className="flex items-start justify-between mb-3">
               <div className="w-10 h-10 bg-[#EEF2FF] rounded-full flex items-center justify-center text-[#4F46E5] font-bold overflow-hidden border border-[#E4E6EB]">
                 {lead.studentPhotoUrl ? (
@@ -1126,6 +1439,11 @@ const LeadsList = ({ user }: { user: AppUser }) => {
           <p className="text-[#606770] italic">No leads captured yet. Start scanning to see them here.</p>
         </div>
       )}
+
+      <LeadDetailModal
+        lead={selectedLead}
+        onClose={() => setSelectedLead(null)}
+      />
     </div>
   );
 };
