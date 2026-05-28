@@ -145,6 +145,36 @@
         "createdAt": { "type": "string", "format": "date-time" }
       },
       "required": ["eventId", "message", "type", "createdAt"]
+    },
+    "Scholarship": {
+      "title": "Scholarship",
+      "description": "Global scholarships.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "title": { "type": "string" },
+        "provider": { "type": "string" },
+        "amount": { "type": "string" },
+        "deadline": { "type": "string" },
+        "description": { "type": "string" },
+        "isPremium": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["title", "amount", "deadline", "description", "isPremium"]
+    },
+    "ParentResource": {
+      "title": "ParentResource",
+      "description": "Educational material for parents.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "title": { "type": "string" },
+        "type": { "type": "string" },
+        "content": { "type": "string" },
+        "description": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["title", "type", "content", "description", "createdAt"]
     }
   },
   "firestore": {
@@ -183,6 +213,14 @@
     "/users/{userId}/notifications/{notifId}": {
       "schema": "Notification",
       "description": "Stores user-specific notifications."
+    },
+    "/scholarships/{scholarshipId}": {
+      "schema": "Scholarship",
+      "description": "Global list of scholarships"
+    },
+    "/parentResources/{resourceId}": {
+      "schema": "ParentResource",
+      "description": "Resources for parents"
     }
   }
 }

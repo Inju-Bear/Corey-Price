@@ -92,6 +92,9 @@ import {
   Eye,
   EyeOff,
   Upload
+  Upload,
+  WifiOff,
+  Video
 } from 'lucide-react';
 import {
   format,
@@ -113,6 +116,7 @@ import { QRCodeCanvas } from 'qrcode.react';
 import { Html5QrcodeScanner } from 'html5-qrcode';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell, PieChart, Pie } from 'recharts';
 
 // --- Leaflet Icon Fix ---
 const icon = L.icon({
@@ -199,6 +203,7 @@ interface AppUser {
   workAuthorization?: 'authorized' | 'requires-sponsorship' | 'not-authorized';
   preferredContact?: 'email' | 'phone' | 'linkedin';
   unlockedEvents?: string[];
+  hasScholarshipAccess?: boolean;
   createdAt: string;
   isAthlete?: boolean;
   sport?: string;
@@ -295,6 +300,27 @@ const PLACEHOLDER_BOOTHS = [
   { id: 9, name: 'NCRF Admin Help', y: 200, x: 200, type: 'service', description: 'General foundation assistance.' },
   { id: 10, name: 'Sponsorship VIP Lounge', y: 200, x: 800, type: 'booth', description: 'Exclusive area for event sponsors.' },
 ];
+
+interface GlobalScholarship {
+  id: string;
+  title: string;
+  provider: string;
+  amount: string;
+  deadline: string;
+  description: string;
+  isPremium: boolean;
+  eventId?: string;
+  createdAt: string;
+}
+
+interface ParentResource {
+  id: string;
+  title: string;
+  type: 'video' | 'article' | 'guide';
+  content: string;
+  description: string;
+  createdAt: string;
+}
 
 interface EventUpdate {
   id: string;
@@ -568,6 +594,96 @@ const StudentDigitalCard = ({ user }: { user: AppUser }) => {
   );
 };
 
+const ScannerModal = ({ isOpen, onClose, onScanSuccess, onScanError }: { isOpen: boolean, onClose: () => void, onScanSuccess: (data: any) => void, onScanError: (error: string) => void }) => {
+  const [internalError, setInternalError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!isOpen) {
+      setInternalError(null);
+      return;
+    }
+    const scanner = new Html5QrcodeScanner(
+      "reader-modal", 
+      { 
+        fps: 10, 
+        aspectRatio: window.innerHeight / window.innerWidth,
+        showTorchButtonIfSupported: true,
+        showZoomSliderIfSupported: true
+      }, 
+      /* verbose= */ false
+    );
+
+    scanner.render((decodedText) => {
+      try {
+        const data = JSON.parse(decodedText);
+        if (data.type === 'expo-lead-v1') {
+          scanner.clear();
+          setInternalError(null);
+          onScanSuccess(data);
+          onClose();
+        } else {
+          setInternalError('Invalid QR code type. Please scan an Expo Student Card.');
+          onScanError('Invalid QR code type. Please scan an Expo Student Card.');
+        }
+      } catch (err) {
+        setInternalError('Could not read QR code. Please try again.');
+        onScanError('Could not read QR code. Please try again.');
+      }
+    }, (err) => {
+      // Silent error
+    });
+
+    return () => {
+      scanner.clear().catch(error => console.error("Failed to clear html5QrcodeScanner", error));
+    };
+  }, [isOpen, onScanSuccess, onScanError, onClose]);
+
+  if (!isOpen) return null;
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black flex flex-col">
+      <div className="flex justify-between items-center w-full p-4 absolute top-0 z-[60] bg-gradient-to-b from-black/80 to-transparent">
+        <div className="text-white font-bold text-lg">Scan Student Card</div>
+        <button onClick={onClose} className="p-2 bg-white/20 rounded-full text-white hover:bg-white/30 transition shadow-lg backdrop-blur-sm">
+          <X className="w-6 h-6" />
+        </button>
+      </div>
+      <div className="relative flex-grow flex items-center justify-center overflow-hidden">
+        <div 
+          id="reader-modal" 
+          className="w-full h-full [&>img]:hidden [&_video]:object-cover [&_video]:w-full [&_video]:h-full [&>div]:border-none [&>div]:shadow-none [&_select]:bg-black/50 [&_select]:text-white [&_select]:border-white/30 [&_select]:rounded-lg [&_select]:p-2 [&_button]:bg-[#1976D2] [&_button]:text-white [&_button]:border-none [&_button]:rounded-lg [&_button]:px-4 [&_button]:py-2 [&_button]:font-bold [&_button]:mt-2"
+        ></div>
+        
+        {/* Custom Overlay */}
+        <div className="absolute inset-0 pointer-events-none flex flex-col items-center justify-center">
+          <div className="w-64 h-64 border-2 border-white/50 rounded-3xl relative">
+            {/* Corners */}
+            <div className="w-8 h-8 rounded-tl-2xl border-t-4 border-l-4 border-white absolute -top-1 -left-1"></div>
+            <div className="w-8 h-8 rounded-tr-2xl border-t-4 border-r-4 border-white absolute -top-1 -right-1"></div>
+            <div className="w-8 h-8 rounded-bl-2xl border-b-4 border-l-4 border-white absolute -bottom-1 -left-1"></div>
+            <div className="w-8 h-8 rounded-br-2xl border-b-4 border-r-4 border-white absolute -bottom-1 -right-1"></div>
+            
+            {/* Scan Line Animation */}
+            <div className="w-full h-0.5 bg-[#1976D2] absolute top-1/2 left-0 shadow-[0_0_8px_2px_rgba(25,118,210,0.5)] animate-pulse"></div>
+          </div>
+        </div>
+      </div>
+      
+      {internalError && (
+        <div className="absolute bottom-24 w-full px-8 z-[60]">
+          <div className="bg-[#D32F2F] text-white text-[13px] font-bold p-3 rounded-lg text-center shadow-lg border border-red-500">
+            {internalError}
+          </div>
+        </div>
+      )}
+      
+      <div className="absolute bottom-10 w-full text-center text-white text-[15px] font-medium px-8 drop-shadow-md z-[60]">
+        Position the QR code within the frame to capture automatically
+      </div>
+    </div>
+  );
+};
+
 const LeadScanner = ({ user, events }: { user: AppUser, events: ExpoEvent[] }) => {
   const [scanResult, setScanResult] = useState<any | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -576,8 +692,51 @@ const LeadScanner = ({ user, events }: { user: AppUser, events: ExpoEvent[] }) =
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
   const [showSuccess, setShowSuccess] = useState(false);
   const [successName, setSuccessName] = useState('');
+  const [isScannerModalOpen, setIsScannerModalOpen] = useState(false);
+  const [offlineLeadsCount, setOfflineLeadsCount] = useState(0);
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [syncError, setSyncError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const updateOfflineCount = () => {
+      const offlineLeads = JSON.parse(localStorage.getItem('offlineLeads') || '[]');
+      setOfflineLeadsCount(offlineLeads.length);
+    };
+    updateOfflineCount();
+    window.addEventListener('online', updateOfflineCount);
+    return () => window.removeEventListener('online', updateOfflineCount);
+  }, [showSuccess]);
 
   const hasAccess = selectedEventId ? ((user.unlockedEvents || []).includes(selectedEventId) || (user.unlockedEvents || []).includes('all_events')) : false;
+
+  const syncOfflineLeads = async () => {
+    const offlineLeads = JSON.parse(localStorage.getItem('offlineLeads') || '[]');
+    if (offlineLeads.length === 0) return;
+    
+    setIsSyncing(true);
+    setSyncError(null);
+    let successCount = 0;
+    
+    try {
+      for (const lead of offlineLeads) {
+        const { _offlineId, ...leadData } = lead;
+        await addDoc(collection(db, 'leads'), leadData);
+        successCount++;
+      }
+      localStorage.removeItem('offlineLeads');
+      setOfflineLeadsCount(0);
+      alert(`Successfully synced ${successCount} leads!`);
+    } catch (err: any) {
+      console.error('Error syncing offline leads:', err);
+      // Keep remaining unsigned leads in local storage
+      const remainingLeads = offlineLeads.slice(successCount);
+      localStorage.setItem('offlineLeads', JSON.stringify(remainingLeads));
+      setOfflineLeadsCount(remainingLeads.length);
+      setSyncError('Network error while syncing. Try again when connectivity improves.');
+    } finally {
+      setIsSyncing(false);
+    }
+  };
 
   const handleCheckout = async (mode: 'single' | 'all') => {
     if (!selectedEventId) return;
@@ -640,35 +799,60 @@ const LeadScanner = ({ user, events }: { user: AppUser, events: ExpoEvent[] }) =
   const handleSaveLead = async () => {
     if (!scanResult) return;
     setSaving(true);
-    try {
-      const leadData: Omit<Lead, 'id'> = {
-        recruiterId: user.uid,
-        eventId: selectedEventId || '',
-        studentId: scanResult.uid,
-        studentName: scanResult.name,
-        studentEmail: scanResult.email,
-        studentPhotoUrl: scanResult.photo,
-        studentSchool: scanResult.school,
-        studentMajor: scanResult.major,
-        studentGradYear: scanResult.gradYear,
-        studentInterests: scanResult.interests,
-        studentLinkedin: scanResult.linkedin,
-        studentPhone: scanResult.phone,
-        studentWorkAuth: scanResult.workAuth,
-        studentResumeUrl: scanResult.resumeUrl,
-        studentPreferredContact: scanResult.prefContact,
-        studentIsAthlete: scanResult.isAthlete,
-        studentSport: scanResult.sport,
-        notes,
-        scannedAt: new Date().toISOString()
-      };
+    
+    const leadData: Omit<Lead, 'id'> = {
+      recruiterId: user.uid,
+      eventId: selectedEventId || '',
+      studentId: scanResult.uid,
+      studentName: scanResult.name,
+      studentEmail: scanResult.email,
+      studentPhotoUrl: scanResult.photo,
+      studentSchool: scanResult.school,
+      studentMajor: scanResult.major,
+      studentGradYear: scanResult.gradYear,
+      studentInterests: scanResult.interests,
+      studentLinkedin: scanResult.linkedin,
+      studentPhone: scanResult.phone,
+      studentWorkAuth: scanResult.workAuth,
+      studentResumeUrl: scanResult.resumeUrl,
+      studentPreferredContact: scanResult.prefContact,
+      studentIsAthlete: scanResult.isAthlete,
+      studentSport: scanResult.sport,
+      notes,
+      scannedAt: new Date().toISOString()
+    };
 
+    try {
+
+      if (!navigator.onLine) {
+        const offlineLeads = JSON.parse(localStorage.getItem('offlineLeads') || '[]');
+        const newOfflineLead = { ...leadData, _offlineId: Date.now().toString() };
+        localStorage.setItem('offlineLeads', JSON.stringify([...offlineLeads, newOfflineLead]));
+        setOfflineLeadsCount(offlineLeads.length + 1);
+        setSuccessName(scanResult.name + ' (Saved Offline)');
+        setShowSuccess(true);
+        setScanResult(null);
+        setNotes('');
+        return;
+      }
+      
       await addDoc(collection(db, 'leads'), leadData);
       setSuccessName(scanResult.name);
       setShowSuccess(true);
       setScanResult(null);
       setNotes('');
-    } catch (err) {
+    } catch (err: any) {
+      if (err.message?.includes('network') || err.code === 'unavailable' || !navigator.onLine) {
+        const offlineLeads = JSON.parse(localStorage.getItem('offlineLeads') || '[]');
+        const newOfflineLead = { ...leadData, _offlineId: Date.now().toString() };
+        localStorage.setItem('offlineLeads', JSON.stringify([...offlineLeads, newOfflineLead]));
+        setOfflineLeadsCount(offlineLeads.length + 1);
+        setSuccessName(scanResult.name + ' (Saved Offline)');
+        setShowSuccess(true);
+        setScanResult(null);
+        setNotes('');
+        return;
+      }
       handleFirestoreError(err, OperationType.CREATE, 'leads');
     } finally {
       setSaving(false);
@@ -677,6 +861,33 @@ const LeadScanner = ({ user, events }: { user: AppUser, events: ExpoEvent[] }) =
 
   return (
     <div className="max-w-2xl mx-auto space-y-6">
+      {offlineLeadsCount > 0 && (
+        <div className="bg-[#FFF3E0] rounded-2xl shadow-sm border border-[#FFE082] p-4 flex flex-col sm:flex-row items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 bg-[#FFCC80] rounded-full flex items-center justify-center text-[#E65100]">
+              <WifiOff className="w-5 h-5" />
+            </div>
+            <div>
+              <h3 className="font-bold text-[#E65100]">Offline Leads Pending</h3>
+              <p className="text-[12px] text-[#E65100]/80">You have {offlineLeadsCount} lead{offlineLeadsCount === 1 ? '' : 's'} saved temporarily. Connect to the network to sync them.</p>
+            </div>
+          </div>
+          <button 
+            onClick={syncOfflineLeads}
+            disabled={isSyncing || !navigator.onLine}
+            className="w-full sm:w-auto px-4 py-2 bg-[#E65100] text-white font-bold rounded-lg hover:bg-[#F57C00] transition-colors disabled:opacity-50 whitespace-nowrap"
+          >
+            {isSyncing ? 'Syncing...' : 'Sync Now'}
+          </button>
+        </div>
+      )}
+      
+      {syncError && (
+        <div className="bg-[#FFF5F5] rounded-lg p-3 text-sm text-[#D32F2F] border border-[#FFEBEE]">
+          {syncError}
+        </div>
+      )}
+
       <div className="bg-white rounded-2xl shadow-sm border border-[#E4E6EB] p-6">
         <label className="block text-[12px] font-bold text-[#606770] uppercase mb-2">Select Event to Scan For</label>
         <select
@@ -754,10 +965,26 @@ const LeadScanner = ({ user, events }: { user: AppUser, events: ExpoEvent[] }) =
 
           <div id="reader" className="w-full max-w-sm mx-auto overflow-hidden rounded-xl border-4 border-[#F0F2F5]"></div>
 
+          
+          <button 
+            onClick={() => setIsScannerModalOpen(true)}
+            className="w-full max-w-xs mx-auto py-4 bg-[#1976D2] text-white font-bold rounded-xl hover:bg-[#1565C0] transition-all shadow-md hover:shadow-lg flex items-center justify-center gap-2"
+          >
+            <ScanLine className="w-5 h-5" />
+            Open Camera Scanner
+          </button>
+          
+          <ScannerModal
+            isOpen={isScannerModalOpen}
+            onClose={() => setIsScannerModalOpen(false)}
+            onScanSuccess={(data) => setScanResult(data)}
+            onScanError={(err) => setError(err)}
+          />
+          
           {error && (
             <div className="mt-4 p-4 bg-[#FFF5F5] text-[#D32F2F] rounded-lg text-sm border border-[#FFEBEE]">
               {error}
-              <button onClick={() => setError(null)} className="ml-2 underline font-bold uppercase text-[10px]">Retry</button>
+              <button onClick={() => setError(null)} className="ml-2 underline font-bold uppercase text-[10px]">Clear</button>
             </div>
           )}
         </div>
@@ -830,12 +1057,157 @@ const LeadScanner = ({ user, events }: { user: AppUser, events: ExpoEvent[] }) =
   );
 };
 
+const LeadDetailModal = ({ lead, onClose }: { lead: Lead | null, onClose: () => void }) => {
+  if (!lead) return null;
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex p-4 items-center justify-center pointer-events-auto">
+      <div className="bg-white rounded-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto shadow-2xl relative border border-[#E4E6EB]">
+        <div className="sticky top-0 bg-white/90 backdrop-blur-md z-10 border-b border-[#E4E6EB] px-6 py-4 flex justify-between items-center">
+          <h2 className="text-xl font-bold text-[#1C1E21]">Lead Profile</h2>
+          <button onClick={onClose} className="p-2 hover:bg-[#F0F2F5] rounded-full text-[#606770] transition-colors">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+        
+        <div className="p-6 space-y-8">
+          {/* Header Profile Section */}
+          <div className="flex flex-col sm:flex-row items-start gap-6">
+            <div className="w-24 h-24 bg-[#EEF2FF] rounded-2xl flex items-center justify-center text-[#4F46E5] text-3xl font-bold overflow-hidden border border-[#E4E6EB] shrink-0">
+              {lead.studentPhotoUrl ? (
+                <img src={lead.studentPhotoUrl} alt="" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+              ) : (
+                lead.studentName[0]
+              )}
+            </div>
+            <div className="space-y-1">
+              <h1 className="text-2xl font-bold text-[#1C1E21]">{lead.studentName}</h1>
+              <div className="text-[14px] text-[#606770]">{lead.studentSchool} {lead.studentGradYear && <span className="font-medium text-[#1976D2]">• Class of {lead.studentGradYear}</span>}</div>
+              <div className="pt-2 flex flex-wrap gap-2">
+                 {lead.studentMajor && (
+                   <span className="px-2.5 py-1 bg-[#F0F2F5] text-[#1C1E21] text-[11px] font-bold rounded-lg border border-[#E4E6EB]">
+                     {lead.studentMajor}
+                   </span>
+                 )}
+                 {lead.studentIsAthlete && (
+                   <span className="px-2.5 py-1 bg-[#E8F5E9] text-[#2E7D32] text-[11px] font-bold rounded-lg border border-[#2E7D32]/20">
+                     Athlete ({lead.studentSport || 'Unknown'})
+                   </span>
+                 )}
+                 {lead.studentWorkAuth && (
+                   <span className={cn(
+                     "px-2.5 py-1 text-[11px] font-bold rounded-lg border",
+                     lead.studentWorkAuth === 'authorized' ? "bg-[#E8F5E9] text-[#2E7D32] border-[#2E7D32]/20" : "bg-[#FFF3E0] text-[#E65100] border-[#E65100]/20"
+                   )}>
+                     {lead.studentWorkAuth === 'authorized' ? 'Work Authorized' : 'Needs Sponsorship'}
+                   </span>
+                 )}
+              </div>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            {/* Contact Info */}
+            <div className="bg-[#F8F9FA] rounded-xl p-5 border border-[#E4E6EB] space-y-4">
+               <h3 className="text-[11px] font-bold text-[#606770] uppercase tracking-wider">Contact Information</h3>
+               
+               <div className="space-y-3">
+                 <div className="flex items-start gap-3 text-[13px] text-[#1C1E21]">
+                   <Mail className="w-4 h-4 text-[#606770] mt-0.5 shrink-0" />
+                   <div>
+                     <div className={cn("break-all", lead.studentPreferredContact === 'email' && "font-bold text-[#1976D2]")}>
+                       {lead.studentEmail}
+                     </div>
+                     {lead.studentPreferredContact === 'email' && <div className="text-[10px] text-[#1976D2] uppercase font-bold mt-0.5">Preferred Contact</div>}
+                   </div>
+                 </div>
+                 
+                 {lead.studentPhone && (
+                   <div className="flex items-start gap-3 text-[13px] text-[#1C1E21]">
+                     <Phone className="w-4 h-4 text-[#606770] mt-0.5 shrink-0" />
+                     <div>
+                       <div className={cn(lead.studentPreferredContact === 'phone' && "font-bold text-[#1976D2]")}>
+                         {lead.studentPhone}
+                       </div>
+                       {lead.studentPreferredContact === 'phone' && <div className="text-[10px] text-[#1976D2] uppercase font-bold mt-0.5">Preferred Contact</div>}
+                     </div>
+                   </div>
+                 )}
+                 
+                 {lead.studentLinkedin && (
+                   <div className="flex items-start gap-3 text-[13px] text-[#1C1E21]">
+                     <Linkedin className="w-4 h-4 text-[#606770] mt-0.5 shrink-0" />
+                     <a href={lead.studentLinkedin} target="_blank" rel="noopener noreferrer" className="text-[#1976D2] hover:underline break-all">
+                       {lead.studentLinkedin}
+                     </a>
+                   </div>
+                 )}
+               </div>
+            </div>
+
+            {/* Application Links */}
+            <div className="bg-[#F8F9FA] rounded-xl p-5 border border-[#E4E6EB] space-y-4">
+              <h3 className="text-[11px] font-bold text-[#606770] uppercase tracking-wider">Professional Application</h3>
+              <div className="space-y-3">
+                {lead.studentResumeUrl ? (
+                  <a href={lead.studentResumeUrl} target="_blank" rel="noopener noreferrer" className="flex items-center gap-2 p-3 bg-white border border-[#E4E6EB] rounded-lg hover:border-[#1976D2] hover:shadow-sm transition-all group">
+                    <FileText className="w-4 h-4 text-[#606770] group-hover:text-[#1976D2]" />
+                    <span className="text-[13px] font-bold text-[#1C1E21] group-hover:text-[#1976D2]">View Resume Document</span>
+                    <ExternalLink className="w-3.5 h-3.5 text-[#606770] ml-auto group-hover:text-[#1976D2]" />
+                  </a>
+                ) : (
+                  <div className="p-3 bg-white border border-[#E4E6EB] border-dashed rounded-lg text-center text-[#606770] text-[12px]">
+                    No resume provided
+                  </div>
+                )}
+                
+                <div className="pt-2">
+                   <div className="text-[11px] font-bold text-[#606770] uppercase mb-2">Interests</div>
+                   <div className="flex flex-wrap gap-1.5">
+                     {lead.studentInterests && lead.studentInterests.length > 0 ? lead.studentInterests.map(interest => (
+                       <span key={interest} className="px-2 py-1 bg-white border border-[#E4E6EB] text-[#1C1E21] text-[11px] rounded-md">
+                         {interest}
+                       </span>
+                     )) : (
+                       <span className="text-[12px] text-[#606770] italic">Not specified</span>
+                     )}
+                   </div>
+                </div>
+              </div>
+            </div>
+          </div>
+          
+          {/* Internal Notes */}
+          <div className="bg-[#FFF8E1] rounded-xl p-5 border border-[#FFE082]">
+            <h3 className="text-[11px] font-bold text-[#F57F17] uppercase tracking-wider flex items-center gap-2 mb-3">
+              <MessageSquare className="w-3.5 h-3.5" />
+              Recruiter Notes
+            </h3>
+            {lead.notes ? (
+              <p className="text-[13px] text-[#424242] whitespace-pre-wrap leading-relaxed">{lead.notes}</p>
+            ) : (
+              <p className="text-[12px] text-[#9E9E9E] italic">No notes recorded during scan.</p>
+            )}
+            
+            <div className="mt-4 pt-4 border-t border-[#FFE082]/50 text-[10px] text-[#757575] flex justify-between items-center">
+              <span>Scanned on {format(new Date(lead.scannedAt), 'MMMM d, yyyy ')} at {format(new Date(lead.scannedAt), 'h:mm a')}</span>
+              <span>Event ID: {lead.eventId.slice(0, 8)}...</span>
+            </div>
+          </div>
+          
+        </div>
+      </div>
+    </div>
+  );
+};
+
 const LeadsList = ({ user }: { user: AppUser }) => {
   const [leads, setLeads] = useState<Lead[]>([]);
   const [loading, setLoading] = useState(true);
   const [sortField, setSortField] = useState<'scannedAt' | 'studentName' | 'studentSchool'>('scannedAt');
   const [sortOrder, setSortOrder] = useState<'desc' | 'asc'>('desc');
   const [recruiterFilter, setRecruiterFilter] = useState<string>('all');
+  const [selectedLead, setSelectedLead] = useState<Lead | null>(null);
 
   useEffect(() => {
     const q = user.role === 'admin'
@@ -906,10 +1278,100 @@ const LeadsList = ({ user }: { user: AppUser }) => {
     document.body.removeChild(link);
   };
 
+  const totalLeads = filteredAndSortedLeads.length;
+  const uniqueSchools = new Set(filteredAndSortedLeads.map(l => l.studentSchool).filter(Boolean)).size;
+  const athleteCount = filteredAndSortedLeads.filter(l => l.studentIsAthlete).length;
+
+  const schoolCounts = filteredAndSortedLeads.reduce((acc, lead) => {
+    const school = lead.studentSchool || 'Unknown';
+    acc[school] = (acc[school] || 0) + 1;
+    return acc;
+  }, {} as Record<string, number>);
+
+  const schoolChartData = Object.entries(schoolCounts)
+    .map(([name, count]) => ({ name, count: count as number }))
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 5); // Top 5 schools
+
+  const gradYearCounts = filteredAndSortedLeads.reduce((acc, lead) => {
+    const year = lead.studentGradYear || 'Unknown';
+    acc[year] = (acc[year] || 0) + 1;
+    return acc;
+  }, {} as Record<string, number>);
+
+  const gradYearChartData = Object.entries(gradYearCounts)
+    .map(([name, value]) => ({ name, value: value as number }))
+    .sort((a, b) => b.value - a.value);
+
+  const COLORS = ['#1976D2', '#D32F2F', '#F57F17', '#388E3C', '#7B1FA2', '#0288D1'];
+
   if (loading) return <div className="p-20 flex justify-center"><Loader2 className="w-8 h-8 animate-spin text-[#D32F2F]" /></div>;
 
   return (
     <div className="space-y-6">
+      {/* Summary Card */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div className="bg-white p-6 rounded-2xl shadow-sm border border-[#E4E6EB] flex flex-col justify-center">
+          <div className="text-[12px] font-bold text-[#606770] uppercase mb-1">Total Scans</div>
+          <div className="text-3xl font-bold text-[#1C1E21]">{totalLeads}</div>
+        </div>
+        <div className="bg-white p-6 rounded-2xl shadow-sm border border-[#E4E6EB] flex flex-col justify-center">
+          <div className="text-[12px] font-bold text-[#606770] uppercase mb-1">Unique Schools</div>
+          <div className="text-3xl font-bold text-[#1976D2]">{uniqueSchools}</div>
+        </div>
+        <div className="bg-white p-6 rounded-2xl shadow-sm border border-[#E4E6EB] flex flex-col justify-center">
+          <div className="text-[12px] font-bold text-[#606770] uppercase mb-1">Athletes Captured</div>
+          <div className="text-3xl font-bold text-[#E65100]">{athleteCount}</div>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div className="bg-white p-6 rounded-2xl shadow-sm border border-[#E4E6EB]">
+          <h3 className="text-[12px] font-bold text-[#606770] uppercase mb-4">Top 5 Schools Represented</h3>
+          <div className="h-64 w-full">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={schoolChartData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#F0F2F5" />
+                <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fontSize: 10, fill: '#606770' }} />
+                <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 10, fill: '#606770' }} allowDecimals={false} />
+                <Tooltip cursor={{ fill: '#F8F9FA' }} contentStyle={{ borderRadius: '8px', border: '1px solid #E4E6EB', fontSize: '12px' }} />
+                <Bar dataKey="count" fill="#1976D2" radius={[4, 4, 0, 0]} maxBarSize={40} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+
+        <div className="bg-white p-6 rounded-2xl shadow-sm border border-[#E4E6EB]">
+          <h3 className="text-[12px] font-bold text-[#606770] uppercase mb-4">Class Year Breakdown</h3>
+          <div className="h-64 w-full flex items-center justify-center">
+            {gradYearChartData.length > 0 ? (
+              <ResponsiveContainer width="100%" height="100%">
+                <PieChart>
+                  <Pie
+                    data={gradYearChartData}
+                    cx="50%"
+                    cy="50%"
+                    innerRadius={60}
+                    outerRadius={80}
+                    paddingAngle={2}
+                    dataKey="value"
+                    label={({ name, percent }) => `${name} (${(percent * 100).toFixed(0)}%)`}
+                    labelLine={false}
+                  >
+                    {gradYearChartData.map((entry, index) => (
+                      <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                    ))}
+                  </Pie>
+                  <Tooltip contentStyle={{ borderRadius: '8px', border: '1px solid #E4E6EB', fontSize: '12px' }} />
+                </PieChart>
+              </ResponsiveContainer>
+            ) : (
+              <div className="text-[12px] text-[#606770] italic">No graduation year data available</div>
+            )}
+          </div>
+        </div>
+      </div>
+
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
           <h2 className="text-xl font-bold text-[#1C1E21]">Captured Leads</h2>
@@ -958,7 +1420,11 @@ const LeadsList = ({ user }: { user: AppUser }) => {
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         {filteredAndSortedLeads.map(lead => (
-          <div key={lead.id} className="bg-white p-5 rounded-2xl shadow-sm border border-[#E4E6EB] hover:shadow-md transition-all group">
+          <div 
+            key={lead.id} 
+            onClick={() => setSelectedLead(lead)}
+            className="bg-white p-5 rounded-2xl shadow-sm border border-[#E4E6EB] hover:shadow-md transition-all group cursor-pointer"
+          >
             <div className="flex items-start justify-between mb-3">
               <div className="w-10 h-10 bg-[#EEF2FF] rounded-full flex items-center justify-center text-[#4F46E5] font-bold overflow-hidden border border-[#E4E6EB]">
                 {lead.studentPhotoUrl ? (
@@ -1049,6 +1515,11 @@ const LeadsList = ({ user }: { user: AppUser }) => {
           <p className="text-[#606770] italic">No leads captured yet. Start scanning to see them here.</p>
         </div>
       )}
+
+      <LeadDetailModal
+        lead={selectedLead}
+        onClose={() => setSelectedLead(null)}
+      />
     </div>
   );
 };
@@ -2495,8 +2966,8 @@ const ProfileSettings = ({ user, onUpdate }: { user: AppUser, onUpdate: (data: P
                 </span>
               ))}
             </div>
-            <input
-              type="text"
+            <input 
+              type="text" 
               value={interestInput}
               onChange={(e) => setInterestInput(e.target.value)}
               onKeyDown={handleAddInterest}
@@ -2506,7 +2977,7 @@ const ProfileSettings = ({ user, onUpdate }: { user: AppUser, onUpdate: (data: P
           </div>
 
           <div className="pt-4 border-t border-[#F0F2F5]">
-            <button
+            <button 
               onClick={handleSave}
               disabled={saving}
               className="px-6 py-2.5 bg-[#D32F2F] text-white font-bold rounded hover:bg-black transition-colors disabled:opacity-50 flex items-center gap-2"
@@ -2528,6 +2999,341 @@ const ProfileSettings = ({ user, onUpdate }: { user: AppUser, onUpdate: (data: P
 
 // --- Constants ---
 const LOGO_URL = "https://cdn.prod.website-files.com/597b2b2bb81a770001f1a5f7/645023e6c2a90181c3caadc0_6321388b64813e55c72d8a15_NCRF_Corp_Sheild_Address_Horiz-p-500.png";
+
+const ParentResourcesClient = () => {
+  const [resources, setResources] = useState<ParentResource[]>([]);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    const fetchResources = async () => {
+      setLoading(true);
+      try {
+        const q = query(collection(db, 'parentResources'));
+        const snapshot = await getDocs(q);
+        const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })) as ParentResource[];
+        setResources(data.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()));
+      } catch (err) {
+        console.error(err);
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchResources();
+  }, []);
+
+  const guides = resources.filter(r => r.type === 'guide');
+  const articles = resources.filter(r => r.type === 'article');
+  const videos = resources.filter(r => r.type === 'video');
+
+  return (
+    <div className="max-w-4xl mx-auto py-10 space-y-8">
+      <div className="mb-8 border-b border-[#E4E6EB] pb-6">
+        <h2 className="text-3xl font-extrabold text-[#1C1E21] tracking-tight">Parental Guidance Resources</h2>
+        <p className="text-[#606770] mt-2">Supporting your child's journey to college success with exclusive info, webinars, and expert advice.</p>
+      </div>
+
+      {loading ? (
+        <div className="text-center py-12 text-[#606770]">Loading resources...</div>
+      ) : resources.length === 0 ? (
+        <div className="bg-white rounded-2xl border border-[#E4E6EB] p-12 text-center shadow-sm">
+          <Users className="w-12 h-12 text-[#1976D2] mx-auto mb-4" />
+          <h3 className="text-lg font-bold text-[#1C1E21] mb-2">Resource Library Under Preparation</h3>
+          <p className="text-[#606770] max-w-sm mx-auto text-[14px]">Check back soon for exclusive webinars, checklists, and expert advice from NCRF.</p>
+        </div>
+      ) : (
+        <div className="space-y-12">
+          {guides.length > 0 && (
+            <section>
+              <h3 className="text-2xl font-bold text-[#1C1E21] mb-4 flex items-center gap-2"><Info className="w-6 h-6 text-[#1976D2]" /> Guides & NCRF Contact</h3>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {guides.map((g) => (
+                  <div key={g.id} className="bg-[#E8F5E9] border border-[#C8E6C9] p-6 rounded-xl shadow-sm text-[#1C1E21]">
+                    <h4 className="font-bold text-lg mb-2 text-[#2E7D32]">{g.title}</h4>
+                    {g.description && <p className="text-sm font-medium mb-4 text-[#388E3C]">{g.description}</p>}
+                    <div className="whitespace-pre-wrap text-[13px] leading-relaxed w-full break-words">
+                      {g.content}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </section>
+          )}
+
+          {videos.length > 0 && (
+            <section>
+              <h3 className="text-2xl font-bold text-[#1C1E21] mb-4 flex items-center gap-2"><Video className="w-6 h-6 text-[#D32F2F]" /> Video Webinars</h3>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {videos.map((v) => (
+                  <div key={v.id} className="bg-white border border-[#E4E6EB] p-4 rounded-xl shadow-sm">
+                    <div className="aspect-video bg-[#F0F2F5] rounded-lg mb-4 flex items-center justify-center overflow-hidden border border-[#E4E6EB]">
+                      {v.content.includes('youtube') || v.content.includes('vimeo') ? (
+                        <iframe src={v.content} title={v.title} className="w-full h-full border-0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowFullScreen></iframe>
+                      ) : (
+                        <div className="text-center p-4">
+                          <Video className="w-8 h-8 text-[#CCC] mx-auto mb-2" />
+                          <a href={v.content} target="_blank" rel="noreferrer" className="text-[12px] font-bold text-[#1976D2] hover:underline break-all">Open Video Link</a>
+                        </div>
+                      )}
+                    </div>
+                    <h4 className="font-bold text-[#1C1E21]">{v.title}</h4>
+                    <p className="text-[13px] text-[#606770] mt-1">{v.description}</p>
+                  </div>
+                ))}
+              </div>
+            </section>
+          )}
+
+          {articles.length > 0 && (
+            <section>
+              <h3 className="text-2xl font-bold text-[#1C1E21] mb-4 flex items-center gap-2"><FileText className="w-6 h-6 text-[#F57F17]" /> Featured Articles</h3>
+              <div className="grid grid-cols-1 gap-4">
+                {articles.map((a) => (
+                  <a key={a.id} href={a.content} target="_blank" rel="noreferrer" className="block bg-white border border-[#E4E6EB] p-5 rounded-xl shadow-sm hover:shadow-md transition-shadow">
+                    <h4 className="font-bold text-[#1976D2] text-lg mb-1">{a.title} &rarr;</h4>
+                    <p className="text-[14px] text-[#606770]">{a.description}</p>
+                  </a>
+                ))}
+              </div>
+            </section>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
+
+const AdminParentResources = () => {
+  const [resources, setResources] = useState<ParentResource[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [title, setTitle] = useState('');
+  const [type, setType] = useState<'video' | 'article' | 'guide'>('video');
+  const [content, setContent] = useState('');
+  const [description, setDescription] = useState('');
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [errors, setErrors] = useState('');
+  const [uploading, setUploading] = useState(false);
+  const [progress, setProgress] = useState(0);
+
+  useEffect(() => {
+    fetchResources();
+  }, []);
+
+  const fetchResources = async () => {
+    setLoading(true);
+    try {
+      const q = query(collection(db, 'parentResources'));
+      const snapshot = await getDocs(q);
+      const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })) as ParentResource[];
+      setResources(data.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()));
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const resetForm = () => {
+    setTitle('');
+    setType('video');
+    setContent('');
+    setDescription('');
+    setEditingId(null);
+    setErrors('');
+    setUploading(false);
+    setProgress(0);
+  };
+
+  const handleEdit = (r: ParentResource) => {
+    setTitle(r.title);
+    setType(r.type);
+    setContent(r.content);
+    setDescription(r.description);
+    setEditingId(r.id);
+  };
+
+  const handleDelete = async (id: string) => {
+    if (!window.confirm('Are you sure you want to delete this resource?')) return;
+    try {
+      await deleteDoc(doc(db, 'parentResources', id));
+      fetchResources();
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setUploading(true);
+    setProgress(0);
+    setErrors('');
+
+    const storageRef = ref(storage, `parent_resources/${Date.now()}_${file.name}`);
+    const uploadTask = uploadBytesResumable(storageRef, file);
+
+    uploadTask.on(
+      'state_changed',
+      (snapshot) => {
+        setProgress((snapshot.bytesTransferred / snapshot.totalBytes) * 100);
+      },
+      (error) => {
+        console.error(error);
+        setErrors('Failed to upload file.');
+        setUploading(false);
+      },
+      async () => {
+        const downloadURL = await getDownloadURL(uploadTask.snapshot.ref);
+        setContent(downloadURL);
+        setUploading(false);
+      }
+    );
+  };
+
+  const handleSave = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!title || !content) {
+      setErrors('Title and content are required.');
+      return;
+    }
+    
+    try {
+      const data: Omit<ParentResource, 'id'> = {
+        title,
+        type,
+        content,
+        description,
+        createdAt: new Date().toISOString()
+      };
+      
+      if (editingId) {
+        await updateDoc(doc(db, 'parentResources', editingId), data);
+      } else {
+        await addDoc(collection(db, 'parentResources'), data);
+      }
+      resetForm();
+      fetchResources();
+    } catch (err) {
+      console.error(err);
+      setErrors('Error saving resource.');
+    }
+  };
+
+  return (
+    <div className="bg-white rounded-lg border border-[#E4E6EB] shadow-sm p-8 max-w-3xl mx-auto w-full mb-12">
+      <h2 className="text-xl font-bold text-[#1C1E21] tracking-tight mb-4">Manage Parent Guidance Resources</h2>
+      <p className="text-[14px] text-[#606770] mb-6">Upload videos, publish articles, or guide parents to connect with NCRF.</p>
+
+      {/* Basic Contact Info instructions */}
+      <div className="bg-[#F8F9FA] border border-[#E4E6EB] p-4 rounded-lg mb-8 text-[13px] text-[#1C1E21] flex flex-col sm:flex-row gap-4 items-center">
+        <Info className="w-8 h-8 text-[#1976D2]" />
+        <div>
+          <span className="font-bold">Did you know?</span> You can create a "guide" resource with contact details (e.g. Email: info@ncrfoundation.org, Phone: (909) 396-0151) that parents will see at the top of their resources page.
+        </div>
+      </div>
+
+      <form onSubmit={handleSave} className="space-y-4 mb-8 bg-[#F8F9FA] p-6 rounded-lg border border-[#E4E6EB]">
+        {errors && <div className="text-red-500 text-sm font-bold bg-red-50 border border-red-200 rounded p-2">{errors}</div>}
+        
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div>
+            <label className="block text-[11px] font-bold uppercase text-[#606770] mb-1.5">Resource Title</label>
+            <input type="text" value={title} onChange={(e) => setTitle(e.target.value)} className="w-full bg-white border border-[#E4E6EB] rounded px-3 py-2 text-sm" placeholder="e.g. College Prep 101" />
+          </div>
+          <div>
+            <label className="block text-[11px] font-bold uppercase text-[#606770] mb-1.5">Type</label>
+            <select value={type} onChange={(e) => setType(e.target.value as any)} className="w-full bg-white border border-[#E4E6EB] rounded px-3 py-2 text-sm">
+              <option value="video">Video</option>
+              <option value="article">Article / PDF Document</option>
+              <option value="guide">Guide / Text Resources</option>
+            </select>
+          </div>
+        </div>
+        
+        {type !== 'guide' && (
+          <div className="mb-4">
+            <label className="block text-[11px] font-bold uppercase text-[#606770] mb-1.5">Upload Media File (Optional)</label>
+            <div className="flex items-center gap-4">
+              <input type="file" id="resourceUpload" className="hidden" accept={type === 'video' ? 'video/*' : 'application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document'} onChange={handleFileUpload} disabled={uploading} />
+              <label htmlFor="resourceUpload" className={`px-4 py-2 bg-[#E3F2FD] text-[#1976D2] rounded text-sm font-bold cursor-pointer hover:bg-[#BBDEFB] transition-colors flex items-center gap-2 ${uploading ? 'opacity-50 pointer-events-none' : ''}`}>
+                <Upload className="w-4 h-4" /> {uploading ? `Uploading... ${Math.round(progress)}%` : `Upload ${type === 'video' ? 'Video' : 'Document'}`}
+              </label>
+              <span className="text-[12px] text-[#606770]">Or provider an external URL below.</span>
+            </div>
+            <input
+              type="text"
+              value={interestInput}
+              onChange={(e) => setInterestInput(e.target.value)}
+              onKeyDown={handleAddInterest}
+              className="w-full bg-[#F0F2F5] border border-[#E4E6EB] rounded px-4 py-2 text-[14px] outline-none focus:border-[#1976D2]"
+              placeholder="Technology, Arts, Nursing... (Press Enter to add)"
+            />
+          </div>
+        )}
+
+          <div className="pt-4 border-t border-[#F0F2F5]">
+            <button
+              onClick={handleSave}
+              disabled={saving}
+              className="px-6 py-2.5 bg-[#D32F2F] text-white font-bold rounded hover:bg-black transition-colors disabled:opacity-50 flex items-center gap-2"
+            >
+              {saving ? 'Saving...' : 'Save Profile Changes'}
+        <div>
+          <label className="block text-[11px] font-bold uppercase text-[#606770] mb-1.5">
+            {type === 'video' ? 'Video URL / Embedded Link' : type === 'article' ? 'Article URL / Document Link' : 'Guide / Contact Content'}
+          </label>
+          {type === 'guide' ? (
+            <textarea value={content} onChange={(e) => setContent(e.target.value)} className="w-full bg-white border border-[#E4E6EB] rounded px-3 py-2 text-sm h-32" placeholder={"Enter guide text or contact info... e.g.\\nPhone: (909) 396-0151\\nEmail: help@ncrfoundation.org"} />
+          ) : (
+            <input type="text" value={content} onChange={(e) => setContent(e.target.value)} className="w-full bg-white border border-[#E4E6EB] rounded px-3 py-2 text-sm" placeholder="https://..." />
+          )}
+        </div>
+        
+        <div>
+          <label className="block text-[11px] font-bold uppercase text-[#606770] mb-1.5">Description (Optional)</label>
+          <textarea value={description} onChange={(e) => setDescription(e.target.value)} className="w-full bg-white border border-[#E4E6EB] rounded px-3 py-2 text-sm h-20 placeholder-[#BCC0C4]" placeholder="Enter a brief description..." />
+        </div>
+        
+        <div className="flex gap-2 pt-2">
+          <button type="submit" disabled={uploading} className={`px-5 py-2 bg-[#1C1E21] text-white font-bold rounded hover:bg-black transition-colors text-sm ${uploading ? 'opacity-50' : ''}`}>
+            {editingId ? 'Update Resource' : 'Publish Resource'}
+          </button>
+          {editingId && (
+            <button type="button" onClick={resetForm} className="px-5 py-2 bg-[#E4E6EB] text-[#1C1E21] font-bold rounded hover:bg-[#D4D6DB] transition-colors text-sm">
+              Cancel
+            </button>
+          )}
+        </div>
+      </form>
+
+      <div className="space-y-4">
+        <h3 className="font-bold text-[#1C1E21] mb-2 border-b border-[#E4E6EB] pb-2">Published Resources</h3>
+        {loading ? <div className="text-sm text-[#606770]">Loading...</div> : resources.length === 0 ? <div className="text-sm text-[#606770]">No resources published yet.</div> : (
+          resources.map(r => (
+            <div key={r.id} className="p-4 bg-white border border-[#E4E6EB] rounded-lg shadow-sm flex items-start justify-between gap-4">
+              <div>
+                <div className="flex items-center gap-2 mb-1">
+                  <span className={`text-[10px] uppercase font-black px-2 py-0.5 rounded ${r.type === 'video' ? 'bg-[#FFEBEE] text-[#D32F2F]' : r.type === 'guide' ? 'bg-[#E8F5E9] text-[#388E3C]' : 'bg-[#E3F2FD] text-[#1976D2]'}`}>{r.type}</span>
+                  <h4 className="font-bold text-[#1C1E21] text-[15px]">{r.title}</h4>
+                </div>
+                {r.description && <p className="text-[12px] text-[#606770] mb-2">{r.description}</p>}
+                <p className="text-[12px] text-[#1976D2] truncate max-w-sm">{r.content}</p>
+              </div>
+              <div className="flex gap-2">
+                <button onClick={() => handleEdit(r)} className="p-2 bg-[#E3F2FD] text-[#1976D2] rounded hover:bg-[#BBDEFB]">
+                  <Edit2 className="w-4 h-4" />
+                </button>
+                <button onClick={() => handleDelete(r.id)} className="p-2 bg-[#FFEBEE] text-[#D32F2F] rounded hover:bg-[#FFCDD2]">
+                  <Trash2 className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+          ))
+        )}
+      </div>
+    </div>
+  );
+};
 
 const AdminEventManager = ({ events, initialEditEvent }: { events: ExpoEvent[], initialEditEvent?: ExpoEvent | null }) => {
   const { user } = useContext(UserContext);
@@ -2584,6 +3390,20 @@ const AdminEventManager = ({ events, initialEditEvent }: { events: ExpoEvent[], 
   const [loadingReport, setLoadingReport] = useState(false);
   const [statusFilter, setStatusFilter] = useState('all');
   const [saving, setSaving] = useState(false);
+
+  // Scholarship Management State
+  const [scholarships, setScholarships] = useState<GlobalScholarship[]>([]);
+  const [loadingScholarships, setLoadingScholarships] = useState(false);
+  const [schTitle, setSchTitle] = useState('');
+  const [schProvider, setSchProvider] = useState('');
+  const [schAmount, setSchAmount] = useState('');
+  const [schDeadline, setSchDeadline] = useState('');
+  const [schDesc, setSchDesc] = useState('');
+  const [schIsPremium, setSchIsPremium] = useState(false);
+  const [schEventId, setSchEventId] = useState('');
+  const [editingSchId, setEditingSchId] = useState<string | null>(null);
+  const [deletingSchId, setDeletingSchId] = useState<string | null>(null);
+  const [schErrors, setSchErrors] = useState<Record<string, string>>({});
   const [deletingEventId, setDeletingEventId] = useState<string | null>(null);
   const [editingReg, setEditingReg] = useState<any | null>(null);
   const [deletingReg, setDeletingReg] = useState<any | null>(null);
@@ -2591,6 +3411,88 @@ const AdminEventManager = ({ events, initialEditEvent }: { events: ExpoEvent[], 
   const [seminarErrors, setSeminarErrors] = useState<Record<string, string>>({});
   const [selectedSeminarIds, setSelectedSeminarIds] = useState<string[]>([]);
   const [selectedSponsorIds, setSelectedSponsorIds] = useState<string[]>([]);
+
+  useEffect(() => {
+    fetchScholarships();
+  }, []);
+
+  const fetchScholarships = async () => {
+    setLoadingScholarships(true);
+    try {
+      const q = query(collection(db, 'scholarships'));
+      const snapshot = await getDocs(q);
+      const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })) as GlobalScholarship[];
+      setScholarships(data.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()));
+    } catch (error) {
+      console.error('Error fetching scholarships:', error);
+    } finally {
+      setLoadingScholarships(false);
+    }
+  };
+
+  const handleSaveScholarship = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!schTitle || !schProvider || !schAmount || !schDeadline) {
+      setSchErrors({ general: 'Title, Provider, Amount, and Deadline are required.' });
+      return;
+    }
+    try {
+      const data: Omit<GlobalScholarship, 'id'> = {
+        title: schTitle,
+        provider: schProvider,
+        amount: schAmount,
+        deadline: schDeadline,
+        description: schDesc,
+        isPremium: schIsPremium,
+        eventId: schEventId || undefined,
+        createdAt: new Date().toISOString()
+      };
+      
+      if (editingSchId) {
+        await updateDoc(doc(db, 'scholarships', editingSchId), data);
+      } else {
+        await addDoc(collection(db, 'scholarships'), data);
+      }
+      resetScholarshipForm();
+      fetchScholarships();
+    } catch (error) {
+      console.error(error);
+      setSchErrors({ general: 'Error saving scholarship.' });
+    }
+  };
+
+  const handleDeleteScholarship = async (id: string) => {
+    if (!window.confirm('Are you sure you want to delete this scholarship?')) return;
+    try {
+      await deleteDoc(doc(db, 'scholarships', id));
+      fetchScholarships();
+    } catch (error) {
+      console.error(error);
+    }
+  };
+
+  const resetScholarshipForm = () => {
+    setSchTitle('');
+    setSchProvider('');
+    setSchAmount('');
+    setSchDeadline('');
+    setSchDesc('');
+    setSchIsPremium(false);
+    setSchEventId('');
+    setEditingSchId(null);
+    setSchErrors({});
+  };
+
+  const handleEditScholarship = (s: GlobalScholarship) => {
+    setSchTitle(s.title);
+    setSchProvider(s.provider);
+    setSchAmount(s.amount);
+    setSchDeadline(s.deadline);
+    setSchDesc(s.description);
+    setSchIsPremium(s.isPremium);
+    setSchEventId(s.eventId || '');
+    setEditingSchId(s.id);
+  };
 
   useEffect(() => {
     if (initialEditEvent) {
@@ -3158,6 +4060,157 @@ const AdminEventManager = ({ events, initialEditEvent }: { events: ExpoEvent[], 
       animate={{ opacity: 1, y: 0 }}
       className="max-w-3xl mx-auto w-full space-y-8 pb-12"
     >
+      {/* Global Access Controls */}
+      <div className="bg-gradient-to-br from-[#F57F17] to-[#E65100] rounded-xl border border-[#FFE082] shadow-sm p-6 text-white relative overflow-hidden">
+        <div className="absolute top-0 right-0 -mr-10 -mt-10 opacity-10"><Star className="w-48 h-48" /></div>
+        <div className="relative z-10 flex flex-col sm:flex-row gap-6 items-center justify-between">
+          <div>
+            <h2 className="text-xl font-bold tracking-tight mb-2 flex items-center gap-2">
+              <Star className="w-5 h-5" /> Global Access Controls
+            </h2>
+            <p className="text-white/80 text-[13px] max-w-sm">
+              Bulk manage access to "My Scholarship Path" and the premium "NCRF Scholarship Corner" for all students.
+            </p>
+          </div>
+          <div className="space-y-3 w-full sm:w-auto">
+            <button 
+              onClick={async () => {
+                const confirm = window.confirm('Are you sure you want to GRANT premium Scholarship Corner access to ALL student and parent accounts this will override current settings?');
+                if (!confirm) return;
+                try {
+                  const q = query(collection(db, 'users'), where('role', 'in', ['student', 'parent']));
+                  const snapshot = await getDocs(q);
+                  const batch = writeBatch(db);
+                  snapshot.docs.forEach(doc => {
+                    batch.update(doc.ref, { hasScholarshipAccess: true });
+                  });
+                  await batch.commit();
+                  alert(`Successfully granted premium access to ${snapshot.docs.length} users.`);
+                } catch (err) {
+                  console.error(err);
+                  alert('Error updating users.');
+                }
+              }}
+              className="w-full px-5 py-2.5 bg-white text-[#E65100] font-bold rounded-lg shadow-sm hover:shadow-md transition-all text-[13px] flex justify-center whitespace-nowrap"
+            >
+              Grant Premium Access to All
+            </button>
+            <button 
+              onClick={async () => {
+                const confirm = window.confirm('Are you sure you want to REVOKE premium Scholarship Corner access from ALL student and parent accounts?');
+                if (!confirm) return;
+                try {
+                  const q = query(collection(db, 'users'), where('role', 'in', ['student', 'parent']));
+                  const snapshot = await getDocs(q);
+                  const batch = writeBatch(db);
+                  snapshot.docs.forEach(doc => {
+                    batch.update(doc.ref, { hasScholarshipAccess: false });
+                  });
+                  await batch.commit();
+                  alert(`Successfully revoked premium access from ${snapshot.docs.length} users.`);
+                } catch (err) {
+                  console.error(err);
+                  alert('Error updating users.');
+                }
+              }}
+              className="w-full px-5 py-2.5 bg-[#FFF3E0] text-[#D32F2F] font-bold rounded-lg border border-[#FFE082] shadow-sm hover:bg-white transition-all text-[13px] flex justify-center whitespace-nowrap"
+            >
+              Revoke Premium Access
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* Global Scholarship Management */}
+      <div className="bg-white rounded-lg border border-[#E4E6EB] shadow-sm p-8">
+        <h2 className="text-xl font-bold text-[#1C1E21] tracking-tight mb-4">Manage Scholarships</h2>
+        <p className="text-[14px] text-[#606770] mb-6">Add or edit scholarships for 'My Scholarship Path' and 'NCRF Scholarship Corner'. Premium scholarships require subscription.</p>
+        
+        <form onSubmit={handleSaveScholarship} className="space-y-4 mb-8 bg-[#F8F9FA] p-6 rounded-lg border border-[#E4E6EB]">
+          {schErrors.general && (
+            <div className="bg-[#FFF5F5] border border-[#FFEBEE] text-[#D32F2F] p-3 rounded text-sm mb-4">
+              {schErrors.general}
+            </div>
+          )}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+             <div>
+               <label className="block text-[11px] font-bold uppercase text-[#606770] mb-1.5">Scholarship Title</label>
+               <input type="text" value={schTitle} onChange={(e) => setSchTitle(e.target.value)} className="w-full bg-white border border-[#E4E6EB] rounded px-3 py-2 text-sm" placeholder="e.g. NCRF Academic Award" />
+             </div>
+             <div>
+               <label className="block text-[11px] font-bold uppercase text-[#606770] mb-1.5">Provider / Organization</label>
+               <input type="text" value={schProvider} onChange={(e) => setSchProvider(e.target.value)} className="w-full bg-white border border-[#E4E6EB] rounded px-3 py-2 text-sm" placeholder="e.g. NCRF Foundation" />
+             </div>
+             <div>
+               <label className="block text-[11px] font-bold uppercase text-[#606770] mb-1.5">Award Amount</label>
+               <input type="text" value={schAmount} onChange={(e) => setSchAmount(e.target.value)} className="w-full bg-white border border-[#E4E6EB] rounded px-3 py-2 text-sm" placeholder="e.g. $5,000" />
+             </div>
+             <div>
+               <label className="block text-[11px] font-bold uppercase text-[#606770] mb-1.5">Deadline</label>
+               <input type="text" value={schDeadline} onChange={(e) => setSchDeadline(e.target.value)} className="w-full bg-white border border-[#E4E6EB] rounded px-3 py-2 text-sm" placeholder="e.g. Oct 31, 2026" />
+             </div>
+          </div>
+          <div>
+            <label className="block text-[11px] font-bold uppercase text-[#606770] mb-1.5">Description</label>
+            <textarea value={schDesc} onChange={(e) => setSchDesc(e.target.value)} className="w-full bg-white border border-[#E4E6EB] rounded px-3 py-2 text-sm h-20 placeholder-[#BCC0C4]" placeholder="Enter scholarship details..." />
+          </div>
+          <div className="flex items-center gap-2 mb-4">
+            <input type="checkbox" id="schPremium" checked={schIsPremium} onChange={(e) => setSchIsPremium(e.target.checked)} className="rounded border-gray-300" />
+            <label htmlFor="schPremium" className="text-sm font-bold text-[#F57F17] flex items-center gap-1">Mark as Premium (NCRF Scholarship Corner) <Star className="w-4 h-4" /></label>
+          </div>
+          <div>
+            <label className="block text-[11px] font-bold uppercase text-[#606770] mb-1.5">Exclusive to Event (Optional)</label>
+            <select
+              value={schEventId}
+              onChange={(e) => setSchEventId(e.target.value)}
+              className="w-full bg-white border border-[#E4E6EB] rounded px-3 py-2 text-sm"
+            >
+              <option value="">All Events / Global</option>
+              {events.map((evt) => (
+                <option key={evt.id} value={evt.id}>{evt.name}</option>
+              ))}
+            </select>
+          </div>
+          
+          <div className="flex gap-2">
+            <button type="submit" className="px-5 py-2 bg-[#1C1E21] text-white font-bold rounded hover:bg-black transition-colors text-sm">
+              {editingSchId ? 'Update Scholarship' : 'Add Scholarship'}
+            </button>
+            {editingSchId && (
+              <button type="button" onClick={resetScholarshipForm} className="px-5 py-2 bg-[#E4E6EB] text-[#1C1E21] font-bold rounded hover:bg-[#D4D6DB] transition-colors text-sm">
+                Cancel
+              </button>
+            )}
+          </div>
+        </form>
+
+        <div className="space-y-3">
+          {scholarships.map(s => (
+            <div key={s.id} className="flex flex-col sm:flex-row justify-between items-start sm:items-center p-4 bg-white border border-[#E4E6EB] rounded-lg shadow-sm gap-4">
+              <div>
+                <h3 className="font-bold text-[#1C1E21] flex items-center gap-2">
+                  {s.title}
+                  {s.isPremium && <span className="bg-[#FFF59D] text-[#F57F17] text-[10px] uppercase font-black px-2 py-0.5 rounded flex items-center gap-1"><Star className="w-3 h-3"/> Premium</span>}
+                  {s.eventId && <span className="bg-[#E4E6EB] text-[#1C1E21] text-[10px] uppercase font-bold px-2 py-0.5 rounded">{events.find(e => e.id === s.eventId)?.name || 'Specific Event'}</span>}
+                </h3>
+                <p className="text-[13px] text-[#606770]">{s.provider} • {s.amount} • Expires: {s.deadline}</p>
+              </div>
+              <div className="flex items-center gap-2 w-full sm:w-auto">
+                <button onClick={() => handleEditScholarship(s)} className="flex-1 sm:flex-none p-2 bg-[#E3F2FD] text-[#1976D2] rounded hover:bg-[#BBDEFB] transition-colors flex justify-center items-center">
+                  <Edit2 className="w-4 h-4" />
+                </button>
+                <button onClick={() => handleDeleteScholarship(s.id)} className="flex-1 sm:flex-none p-2 bg-[#FFEBEE] text-[#D32F2F] rounded hover:bg-[#FFCDD2] transition-colors flex justify-center items-center">
+                  <Trash2 className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+          ))}
+          {scholarships.length === 0 && !loadingScholarships && (
+            <div className="text-center py-6 text-[#606770] text-sm">No scholarships created yet.</div>
+          )}
+        </div>
+      </div>
+
       {/* Existing Events List */}
       <div className="bg-white rounded-lg border border-[#E4E6EB] shadow-sm p-8">
         <div className="flex items-center justify-between mb-6">
@@ -4893,7 +5946,152 @@ const NotificationBroadcaster = () => {
   );
 };
 
-const ScholarshipTracker = () => {
+const NCRFScholarshipCorner = ({ events }: { events: ExpoEvent[] }) => {
+  const { user } = useContext(UserContext);
+  const [loading, setLoading] = useState(false);
+  const [scholarships, setScholarships] = useState<GlobalScholarship[]>([]);
+
+  useEffect(() => {
+    const fetchScholarships = async () => {
+      try {
+        const q = query(collection(db, 'scholarships'), where('isPremium', '==', true));
+        const snapshot = await getDocs(q);
+        const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })) as GlobalScholarship[];
+        setScholarships(data);
+      } catch (err) {
+        console.error(err);
+      }
+    };
+    fetchScholarships();
+  }, []);
+
+  const handleSubscribe = async () => {
+    if (!user) return;
+    setLoading(true);
+    try {
+      const response = await fetch('/api/create-scholarship-subscription', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ userId: user.uid })
+      });
+      const data = await response.json();
+      if (data.url) {
+        window.location.href = data.url;
+      } else {
+        alert('Error initiating checkout: ' + (data.error || 'Unknown error'));
+      }
+    } catch (err) {
+      console.error(err);
+      alert('Could not connect to payment server.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  if (!user?.hasScholarshipAccess) {
+    return (
+      <div className="bg-white p-8 rounded-2xl shadow-sm border border-[#E4E6EB] max-w-3xl mx-auto text-center mt-10">
+        <Star className="w-16 h-16 text-[#F57F17] mx-auto mb-4" />
+        <h2 className="text-2xl font-black text-[#1C1E21] mb-2">NCRF Scholarship Corner Access</h2>
+        <p className="text-[#606770] mb-6 max-w-lg mx-auto">
+          Upgrade to receive our curated, exclusive list of scholarships specifically selected by the NCRF team for parents and students. Gain the competitive edge for just <strong>$5/month</strong>.
+        </p>
+        <button 
+          onClick={handleSubscribe} 
+          disabled={loading}
+          className="bg-gradient-to-r from-[#F57F17] to-[#F57C00] text-white px-8 py-3 rounded-lg font-bold text-lg hover:shadow-lg transition-all transform hover:-translate-y-0.5"
+        >
+          {loading ? 'Processing...' : 'Subscribe Now for $5/mo'}
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-6">
+      <div className="bg-gradient-to-r from-[#FFF8E1] to-[#FFF3E0] p-6 rounded-2xl border border-[#FFE082] flex gap-4 items-center">
+        <Star className="w-10 h-10 text-[#F57F17]" />
+        <div>
+          <h2 className="text-xl font-bold text-[#F57F17]">Premium NCRF Scholarships</h2>
+          <p className="text-[#E65100]/80 font-medium">You have unlocked our exclusive curated list.</p>
+        </div>
+      </div>
+      
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        {scholarships.length === 0 && (
+          <div className="col-span-2 text-center text-[#606770] py-8">No premium scholarships available at this time.</div>
+        )}
+        {scholarships.map((s, i) => (
+          <div key={i} className="bg-white p-6 rounded-xl border border-[#E4E6EB] shadow-sm hover:shadow-md transition-shadow flex flex-col h-full">
+            <h3 className="font-bold text-[#1C1E21] text-lg flex flex-wrap gap-2 items-center">
+              {s.title}
+              {s.eventId && <span className="bg-[#E4E6EB] text-[#1C1E21] text-[10px] uppercase font-bold px-2 py-0.5 rounded">{events.find(e => e.id === s.eventId)?.name || 'Event Exclusive'}</span>}
+            </h3>
+            <div className="text-[#1976D2] font-black text-xl my-2">{s.amount}</div>
+            <p className="text-[13px] text-[#606770] mb-4 flex-grow">{s.description}</p>
+            <div className="flex justify-between items-center pt-4 border-t border-[#F0F2F5]">
+              <span className="text-[11px] font-bold text-[#D32F2F] uppercase">Deadline: {s.deadline}</span>
+              <button className="text-[12px] font-bold text-[#1976D2] bg-[#E3F2FD] px-3 py-1.5 rounded-lg hover:bg-[#BBDEFB]">
+                Apply Now
+              </button>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+};
+
+const AvailableScholarships = ({ onAdd, events }: { onAdd: (s: GlobalScholarship) => void, events: ExpoEvent[] }) => {
+  const [scholarships, setScholarships] = useState<GlobalScholarship[]>([]);
+
+  useEffect(() => {
+    const fetchScholarships = async () => {
+      try {
+        const q = query(collection(db, 'scholarships'), where('isPremium', '==', false));
+        const snapshot = await getDocs(q);
+        const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })) as GlobalScholarship[];
+        setScholarships(data);
+      } catch (err) {
+        console.error(err);
+      }
+    };
+    fetchScholarships();
+  }, []);
+
+  if (scholarships.length === 0) return null;
+
+  return (
+    <div className="mt-8">
+      <div className="mb-4">
+        <h3 className="font-extrabold text-[#1C1E21] text-lg tracking-tight">Available Public Scholarships</h3>
+        <p className="text-[12px] text-[#606770] font-medium">Add these suggested scholarships to your tracker.</p>
+      </div>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        {scholarships.map(s => (
+          <div key={s.id} className="bg-white p-5 rounded-xl border border-[#E4E6EB] shadow-sm flex flex-col items-start h-full hover:shadow-md transition-shadow">
+            <h4 className="font-bold text-[#1C1E21] mb-1 flex flex-wrap gap-2 items-center">
+              {s.title}
+              {s.eventId && <span className="bg-[#E4E6EB] text-[#1C1E21] text-[9px] uppercase font-bold px-1.5 py-0.5 rounded">{events.find(e => e.id === s.eventId)?.name || 'Event Exclusive'}</span>}
+            </h4>
+            <div className="text-[14px] text-[#1976D2] font-black mb-2">{s.amount}</div>
+            <p className="text-[12px] text-[#606770] flex-grow mb-4">{s.description}</p>
+            <div className="flex w-full items-center justify-between border-t border-[#F0F2F5] pt-3 mt-auto">
+              <span className="text-[10px] font-bold text-[#D32F2F] uppercase">Due: {s.deadline}</span>
+              <button onClick={() => onAdd(s)} className="text-[11px] font-bold text-[#1976D2] bg-[#E3F2FD] px-3 py-1.5 rounded hover:bg-[#BBDEFB] flex items-center gap-1 transition-colors">
+                <Plus className="w-3 h-3" /> Add to Path
+              </button>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+};
+
+const ScholarshipTracker = ({ events }: { events: ExpoEvent[] }) => {
   const { user } = useContext(UserContext);
   const [apps, setApps] = useState<ScholarshipApplication[]>([
     {
@@ -5065,6 +6263,17 @@ const ScholarshipTracker = () => {
           </button>
         </div>
       </div>
+
+      <AvailableScholarships events={events} onAdd={(s) => {
+        setApps([{
+          id: Math.random().toString(),
+          name: s.title,
+          provider: s.provider,
+          amount: typeof s.amount === 'string' ? parseFloat(s.amount.replace(/[^0-9.-]+/g,"")) || 0 : s.amount,
+          deadline: s.deadline,
+          status: 'draft'
+        }, ...apps]);
+      }} />
 
       {/* Detailed Edit View / Modal */}
       <AnimatePresence>
@@ -5524,6 +6733,24 @@ const StudentPortal = ({ user, setActiveView }: { user: AppUser, setActiveView: 
             </div>
 
             <div
+            <div 
+              onClick={() => setActiveView('scholarship-corner')}
+              className="bg-gradient-to-br from-[#FFF8E1] to-[#FFF3E0] rounded-2xl border border-[#FFE082] p-6 hover:shadow-lg hover:border-[#F57F17] transition-all cursor-pointer group flex flex-col items-start h-full relative overflow-hidden"
+            >
+              <div className="absolute -top-4 -right-4 opacity-10 group-hover:scale-110 transition-transform">
+                <Star className="w-32 h-32 text-[#F57F17]" />
+              </div>
+              <div className="w-12 h-12 bg-white rounded-xl flex items-center justify-center mb-4 group-hover:scale-110 transition-transform shadow-sm relative z-10 border border-[#FFE082]">
+                <Star className="w-6 h-6 text-[#F57F17]" />
+              </div>
+              <h3 className="text-lg font-black text-[#F57F17] mb-2 relative z-10">NCRF Premium Scholarships</h3>
+              <p className="text-[13px] text-[#E65100]/80 font-medium leading-relaxed mb-4 flex-grow relative z-10">Exclusive curated list for parents and students. Gain the competitive edge.</p>
+              <div className="mt-auto flex items-center gap-2 text-[12px] font-bold text-[#F57F17] uppercase tracking-wider relative z-10">
+                Unlock Now <ChevronRight className="w-4 h-4" />
+              </div>
+            </div>
+
+            <div 
               onClick={() => setActiveView('workshops')}
               className="bg-white rounded-2xl border border-[#E4E6EB] p-6 hover:shadow-lg hover:border-[#1976D2] transition-all cursor-pointer group flex flex-col items-start h-full"
             >
@@ -5706,7 +6933,7 @@ const Dashboard = ({ events, onSelectEvent, setActiveView }: { events: ExpoEvent
       )}
 
       {user.role === 'parent' && (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mb-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-4">
           <div onClick={() => setActiveView('resources')} className="bg-gradient-to-br from-[#1A2233] to-[#121826] rounded-lg p-5 text-white cursor-pointer hover:shadow-lg transition-all group relative overflow-hidden">
             <div className="absolute top-0 right-0 -mr-4 -mt-4 opacity-10 group-hover:scale-110 transition-transform"><Info className="w-24 h-24" /></div>
             <h3 className="text-xl font-bold tracking-tight mb-1">Guidance Resources</h3>
@@ -5714,6 +6941,13 @@ const Dashboard = ({ events, onSelectEvent, setActiveView }: { events: ExpoEvent
             <div className="flex items-center gap-2 text-sm font-bold bg-white/20 w-max px-3 py-1.5 rounded-md"><Info className="w-4 h-4" /> View Library</div>
           </div>
 
+          <div onClick={() => setActiveView('scholarship-corner')} className="bg-gradient-to-br from-[#FFF8E1] to-[#FFF3E0] border border-[#FFE082] rounded-lg p-5 cursor-pointer hover:shadow-lg transition-all group relative overflow-hidden">
+             <div className="absolute top-0 right-0 -mr-4 -mt-4 opacity-10 group-hover:scale-110 transition-transform"><Star className="w-24 h-24 text-[#F57F17]" /></div>
+             <h3 className="text-xl font-bold tracking-tight mb-1 text-[#F57F17]">Premium Scholarships</h3>
+             <p className="text-[#E65100]/80 text-[13px] mb-4 font-medium">Curated list for parents.</p>
+             <div className="flex items-center gap-2 text-sm font-bold text-[#F57F17] w-max px-3 py-1.5 rounded-md"><Star className="w-4 h-4"/> Access Corner</div>
+          </div>
+          
           <div onClick={() => setActiveView('workshops')} className="bg-[#F8F9FA] border border-[#E4E6EB] rounded-lg p-5 cursor-pointer hover:shadow-md transition-all group relative overflow-hidden">
             <div className="absolute top-0 right-0 -mr-4 -mt-4 opacity-5 group-hover:scale-110 transition-transform"><Clock className="w-24 h-24 text-[#1C1E21]" /></div>
             <div className="w-10 h-10 bg-white rounded-full flex items-center justify-center text-[#1C1E21] shadow-sm mb-3 group-hover:scale-110 transition-transform"><Clock className="w-5 h-5" /></div>
@@ -6013,6 +7247,8 @@ export default function App() {
     const urlParams = new URLSearchParams(window.location.search);
     const paymentSuccess = urlParams.get('payment_success');
     const paymentCancel = urlParams.get('payment_cancel');
+    const subscriptionSuccess = urlParams.get('subscription_success');
+    const subscriptionCancel = urlParams.get('subscription_cancel');
     const eventId = urlParams.get('eventId');
 
     if (paymentSuccess === 'true' && eventId && user && user.role === 'recruiter') {
@@ -6039,6 +7275,24 @@ export default function App() {
       unlockEvent();
     } else if (paymentCancel === 'true') {
       alert('Payment was cancelled.');
+      window.history.replaceState({}, document.title, window.location.pathname);
+    } else if (subscriptionSuccess === 'true' && user) {
+      const unlockSubscription = async () => {
+        try {
+          await updateDoc(doc(db, 'users', user.uid), {
+            hasScholarshipAccess: true
+          });
+          setUser({ ...user, hasScholarshipAccess: true });
+          setActiveView('scholarship-corner');
+          alert('Subscription successful! You now have access to NCRF Scholarship Corner.');
+          window.history.replaceState({}, document.title, window.location.pathname);
+        } catch (error) {
+           console.error('Error unlocking subscription:', error);
+        }
+      };
+      unlockSubscription();
+    } else if (subscriptionCancel === 'true') {
+      alert('Subscription payment was cancelled.');
       window.history.replaceState({}, document.title, window.location.pathname);
     }
   }, [user]);
@@ -6287,6 +7541,15 @@ export default function App() {
                         },
                         {
                           label: 'NCRF Resources',
+                        { 
+                          label: 'NCRF Scholarship Corner', 
+                          icon: Star,
+                          active: activeView === 'scholarship-corner', 
+                          onClick: () => setActiveView('scholarship-corner'), 
+                          roles: ['student', 'parent'] 
+                        },
+                        { 
+                          label: 'NCRF Resources', 
                           icon: Info,
                           roles: ['student', 'parent', 'admin'],
                           onClick: () => window.open('https://www.ncrfoundation.org/', '_blank')
@@ -6631,7 +7894,18 @@ export default function App() {
                         <h2 className="text-3xl font-black text-[#1C1E21] tracking-tight">Scholarship Center</h2>
                         <p className="text-[#606770] mt-1 font-medium italic">Empowering your future, one application at a time.</p>
                       </div>
-                      <ScholarshipTracker />
+                      <ScholarshipTracker events={events} />
+                    </div>
+                  ) : activeView === 'scholarship-corner' && (user?.role === 'student' || user?.role === 'parent') ? (
+                    <div className="max-w-5xl mx-auto py-6">
+                      <div className="mb-8">
+                        <h2 className="text-3xl font-black text-[#1C1E21] tracking-tight flex items-center gap-2">
+                          <Star className="text-[#F57F17]" />
+                          NCRF Scholarship Corner
+                        </h2>
+                        <p className="text-[#606770] mt-1 font-medium italic">Exclusive, curated scholarship list for our premium members.</p>
+                      </div>
+                      <NCRFScholarshipCorner events={events} />
                     </div>
                   ) : activeView === 'workshops' ? (
                     <div className="max-w-4xl mx-auto py-6">
@@ -6719,17 +7993,7 @@ export default function App() {
                       </div>
                     </div>
                   ) : activeView === 'resources' && user?.role === 'parent' ? (
-                    <div className="max-w-4xl mx-auto py-10">
-                      <div className="mb-8">
-                        <h2 className="text-3xl font-extrabold text-[#1C1E21]">Parental Guidance Resources</h2>
-                        <p className="text-[#606770] mt-2">Supporting your child's journey to college success.</p>
-                      </div>
-                      <div className="bg-white rounded-2xl border border-[#E4E6EB] p-12 text-center shadow-sm">
-                        <Users className="w-12 h-12 text-[#1976D2] mx-auto mb-4" />
-                        <h3 className="text-lg font-bold text-[#1C1E21] mb-2">Resource Library Under Preparation</h3>
-                        <p className="text-[#606770] max-w-sm mx-auto text-[14px]">Access exclusive webinars, checklists, and expert advice specifically curated for parents and guardians.</p>
-                      </div>
-                    </div>
+                    <ParentResourcesClient />
                   ) : activeView === 'digital-card' && user?.role === 'student' ? (
                     <StudentPortal user={user} setActiveView={setActiveView} />
                   ) : activeView === 'lead-capture' && (user?.role === 'recruiter' || user?.role === 'admin') ? (
@@ -6745,7 +8009,10 @@ export default function App() {
                       <LeadsList user={user!} />
                     </div>
                   ) : activeView === 'management' && user?.role === 'admin' ? (
-                    <AdminEventManager events={events} initialEditEvent={eventToEdit} />
+                    <div className="flex flex-col gap-8">
+                      <AdminEventManager events={events} initialEditEvent={eventToEdit} />
+                      <AdminParentResources />
+                    </div>
                   ) : activeView === 'broadcast' && user?.role === 'admin' ? (
                     <div className="max-w-4xl mx-auto">
                       <div className="mb-8">

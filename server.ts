@@ -89,6 +89,50 @@ async function startServer() {
     }
   });
 
+  app.post("/api/create-scholarship-subscription", async (req, res) => {
+    try {
+      const { userId } = req.body;
+      const stripe = getStripe();
+      
+      const appUrl = process.env.APP_URL || req.headers.origin || req.headers.referer || 'http://localhost:3000';
+      const successUrl = `${appUrl}?subscription_success=true`;
+      const cancelUrl = `${appUrl}?subscription_cancel=true`;
+
+      const session = await stripe.checkout.sessions.create({
+        payment_method_types: ['card'],
+        line_items: [
+          {
+            price_data: {
+              currency: 'usd',
+              product_data: {
+                name: 'NCRF Scholarship Corner Access',
+                description: 'Exclusive scholarship lists curated by NCRF.',
+              },
+              unit_amount: 500, // $5.00
+              recurring: {
+                interval: 'month',
+              },
+            },
+            quantity: 1,
+          },
+        ],
+        mode: 'subscription',
+        success_url: successUrl,
+        cancel_url: cancelUrl,
+        metadata: {
+          userId
+        }
+      });
+
+      res.json({ id: session.id, url: session.url });
+    } catch (error: any) {
+      if (error.message.includes('STRIPE_SECRET_KEY')) {
+         return res.status(500).json({ error: 'Stripe backend is not configured' });
+      }
+      res.status(500).json({ error: error.message });
+    }
+  });
+
   // Vite middleware for development
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
