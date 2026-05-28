@@ -91,7 +91,6 @@ import {
   Settings,
   Eye,
   EyeOff,
-  Upload
   Upload,
   WifiOff,
   Video
@@ -3244,24 +3243,9 @@ const AdminParentResources = () => {
               </label>
               <span className="text-[12px] text-[#606770]">Or provider an external URL below.</span>
             </div>
-            <input
-              type="text"
-              value={interestInput}
-              onChange={(e) => setInterestInput(e.target.value)}
-              onKeyDown={handleAddInterest}
-              className="w-full bg-[#F0F2F5] border border-[#E4E6EB] rounded px-4 py-2 text-[14px] outline-none focus:border-[#1976D2]"
-              placeholder="Technology, Arts, Nursing... (Press Enter to add)"
-            />
           </div>
         )}
 
-          <div className="pt-4 border-t border-[#F0F2F5]">
-            <button
-              onClick={handleSave}
-              disabled={saving}
-              className="px-6 py-2.5 bg-[#D32F2F] text-white font-bold rounded hover:bg-black transition-colors disabled:opacity-50 flex items-center gap-2"
-            >
-              {saving ? 'Saving...' : 'Save Profile Changes'}
         <div>
           <label className="block text-[11px] font-bold uppercase text-[#606770] mb-1.5">
             {type === 'video' ? 'Video URL / Embedded Link' : type === 'article' ? 'Article URL / Document Link' : 'Guide / Contact Content'}
@@ -6716,7 +6700,6 @@ const StudentPortal = ({ user, setActiveView }: { user: AppUser, setActiveView: 
               </div>
             </div>
 
-            <div
             <div 
               onClick={() => setActiveView('scholarship-corner')}
               className="bg-gradient-to-br from-[#FFF8E1] to-[#FFF3E0] rounded-2xl border border-[#FFE082] p-6 hover:shadow-lg hover:border-[#F57F17] transition-all cursor-pointer group flex flex-col items-start h-full relative overflow-hidden"
@@ -7523,8 +7506,6 @@ export default function App() {
                           onClick: () => setActiveView('floorplan'),
                           roles: ['student', 'parent', 'admin']
                         },
-                        {
-                          label: 'NCRF Resources',
                         { 
                           label: 'NCRF Scholarship Corner', 
                           icon: Star,
