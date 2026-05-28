@@ -3,6 +3,7 @@ import { createServer as createViteServer } from "vite";
 import path from "path";
 import dotenv from "dotenv";
 import Stripe from "stripe";
+import rateLimit from "express-rate-limit";
 
 dotenv.config();
 
@@ -26,6 +27,15 @@ async function startServer() {
   // app.post('/api/webhook', express.raw({type: 'application/json'}), ...)
 
   app.use(express.json());
+
+  const limiter = rateLimit({
+    windowMs: 15 * 60 * 1000, // 15 minutes
+    max: process.env.NODE_ENV === "production" ? 1000 : 10000,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: "Too many requests from this IP, please try again after 15 minutes",
+  });
+  app.use(limiter);
 
   app.post("/api/create-checkout-session", async (req, res) => {
     try {
