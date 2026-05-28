@@ -117,6 +117,7 @@ import { Html5QrcodeScanner } from 'html5-qrcode';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell, PieChart, Pie } from 'recharts';
+import { sanitizeUrl } from '@braintree/sanitize-url';
 
 // --- Leaflet Icon Fix ---
 const icon = L.icon({
@@ -131,23 +132,6 @@ L.Marker.prototype.options.icon = icon;
 // --- Utils ---
 function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
-}
-
-function sanitizeUrl(url: string | undefined): string {
-  if (!url) return '';
-  const trimmed = url.trim();
-  if (
-    trimmed.startsWith('http://') || 
-    trimmed.startsWith('https://') || 
-    trimmed.startsWith('/') || 
-    trimmed.startsWith('blob:')
-  ) {
-    return trimmed;
-  }
-  if (/^[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/.test(trimmed)) {
-    return `https://${trimmed}`;
-  }
-  return '';
 }
 
 const isWorkshopHappeningNow = (timeStr: string) => {
