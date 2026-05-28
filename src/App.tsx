@@ -185,6 +185,7 @@ interface AppUser {
   workAuthorization?: 'authorized' | 'requires-sponsorship' | 'not-authorized';
   preferredContact?: 'email' | 'phone' | 'linkedin';
   unlockedEvents?: string[];
+  hasScholarshipAccess?: boolean;
   createdAt: string;
   isAthlete?: boolean;
   sport?: string;
@@ -5288,6 +5289,91 @@ const NotificationBroadcaster = () => {
   );
 };
 
+const NCRFScholarshipCorner = () => {
+  const { user } = useContext(UserContext);
+  const [loading, setLoading] = useState(false);
+
+  // Exclusive list of scholarships for premium members
+  const exclusiveScholarships = [
+    { title: 'NCRF Academic Excellence Award', amount: '$10,000', deadline: 'Oct 31, 2026', desc: 'For students demonstrating outstanding academic achievement in underrepresented communities.' },
+    { title: 'Future Leaders of STEM', amount: '$5,000', deadline: 'Dec 15, 2026', desc: 'Funded by participating corporations to support aspiring engineers.' },
+    { title: 'Community Impact Grant', amount: '$2,500', deadline: 'Nov 30, 2026', desc: 'Awarded to students with a proven track record of local volunteer work.' },
+    { title: 'First-Generation Scholar', amount: '$7,500', deadline: 'Jan 15, 2027', desc: 'Exclusive funding for students who will be the first in their family to attend college.' }
+  ];
+
+  const handleSubscribe = async () => {
+    if (!user) return;
+    setLoading(true);
+    try {
+      const response = await fetch('/api/create-scholarship-subscription', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ userId: user.uid })
+      });
+      const data = await response.json();
+      if (data.url) {
+        window.location.href = data.url;
+      } else {
+        alert('Error initiating checkout: ' + (data.error || 'Unknown error'));
+      }
+    } catch (err) {
+      console.error(err);
+      alert('Could not connect to payment server.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  if (!user?.hasScholarshipAccess) {
+    return (
+      <div className="bg-white p-8 rounded-2xl shadow-sm border border-[#E4E6EB] max-w-3xl mx-auto text-center mt-10">
+        <Star className="w-16 h-16 text-[#F57F17] mx-auto mb-4" />
+        <h2 className="text-2xl font-black text-[#1C1E21] mb-2">NCRF Scholarship Corner Access</h2>
+        <p className="text-[#606770] mb-6 max-w-lg mx-auto">
+          Upgrade to receive our curated, exclusive list of scholarships specifically selected by the NCRF team for parents and students. Gain the competitive edge for just <strong>$5/month</strong>.
+        </p>
+        <button 
+          onClick={handleSubscribe} 
+          disabled={loading}
+          className="bg-gradient-to-r from-[#F57F17] to-[#F57C00] text-white px-8 py-3 rounded-lg font-bold text-lg hover:shadow-lg transition-all transform hover:-translate-y-0.5"
+        >
+          {loading ? 'Processing...' : 'Subscribe Now for $5/mo'}
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-6">
+      <div className="bg-gradient-to-r from-[#FFF8E1] to-[#FFF3E0] p-6 rounded-2xl border border-[#FFE082] flex gap-4 items-center">
+        <Star className="w-10 h-10 text-[#F57F17]" />
+        <div>
+          <h2 className="text-xl font-bold text-[#F57F17]">Premium NCRF Scholarships</h2>
+          <p className="text-[#E65100]/80 font-medium">You have unlocked our exclusive curated list.</p>
+        </div>
+      </div>
+      
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        {exclusiveScholarships.map((s, i) => (
+          <div key={i} className="bg-white p-6 rounded-xl border border-[#E4E6EB] shadow-sm hover:shadow-md transition-shadow">
+            <h3 className="font-bold text-[#1C1E21] text-lg">{s.title}</h3>
+            <div className="text-[#1976D2] font-black text-xl my-2">{s.amount}</div>
+            <p className="text-[13px] text-[#606770] mb-4">{s.desc}</p>
+            <div className="flex justify-between items-center pt-4 border-t border-[#F0F2F5]">
+              <span className="text-[11px] font-bold text-[#D32F2F] uppercase">Deadline: {s.deadline}</span>
+              <button className="text-[12px] font-bold text-[#1976D2] bg-[#E3F2FD] px-3 py-1.5 rounded-lg hover:bg-[#BBDEFB]">
+                Apply Now
+              </button>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+};
+
 const ScholarshipTracker = () => {
   const { user } = useContext(UserContext);
   const [apps, setApps] = useState<ScholarshipApplication[]>([
@@ -5916,6 +6002,23 @@ const StudentPortal = ({ user, setActiveView }: { user: AppUser, setActiveView: 
             </div>
 
             <div 
+              onClick={() => setActiveView('scholarship-corner')}
+              className="bg-gradient-to-br from-[#FFF8E1] to-[#FFF3E0] rounded-2xl border border-[#FFE082] p-6 hover:shadow-lg hover:border-[#F57F17] transition-all cursor-pointer group flex flex-col items-start h-full relative overflow-hidden"
+            >
+              <div className="absolute -top-4 -right-4 opacity-10 group-hover:scale-110 transition-transform">
+                <Star className="w-32 h-32 text-[#F57F17]" />
+              </div>
+              <div className="w-12 h-12 bg-white rounded-xl flex items-center justify-center mb-4 group-hover:scale-110 transition-transform shadow-sm relative z-10 border border-[#FFE082]">
+                <Star className="w-6 h-6 text-[#F57F17]" />
+              </div>
+              <h3 className="text-lg font-black text-[#F57F17] mb-2 relative z-10">NCRF Premium Scholarships</h3>
+              <p className="text-[13px] text-[#E65100]/80 font-medium leading-relaxed mb-4 flex-grow relative z-10">Exclusive curated list for parents and students. Gain the competitive edge.</p>
+              <div className="mt-auto flex items-center gap-2 text-[12px] font-bold text-[#F57F17] uppercase tracking-wider relative z-10">
+                Unlock Now <ChevronRight className="w-4 h-4" />
+              </div>
+            </div>
+
+            <div 
               onClick={() => setActiveView('workshops')}
               className="bg-white rounded-2xl border border-[#E4E6EB] p-6 hover:shadow-lg hover:border-[#1976D2] transition-all cursor-pointer group flex flex-col items-start h-full"
             >
@@ -6098,12 +6201,19 @@ const Dashboard = ({ events, onSelectEvent, setActiveView }: { events: ExpoEvent
       )}
 
       {user.role === 'parent' && (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mb-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-4">
           <div onClick={() => setActiveView('resources')} className="bg-gradient-to-br from-[#1A2233] to-[#121826] rounded-lg p-5 text-white cursor-pointer hover:shadow-lg transition-all group relative overflow-hidden">
              <div className="absolute top-0 right-0 -mr-4 -mt-4 opacity-10 group-hover:scale-110 transition-transform"><Info className="w-24 h-24" /></div>
              <h3 className="text-xl font-bold tracking-tight mb-1">Guidance Resources</h3>
              <p className="text-white/80 text-[13px] mb-4">Exclusive webinars & checklists.</p>
              <div className="flex items-center gap-2 text-sm font-bold bg-white/20 w-max px-3 py-1.5 rounded-md"><Info className="w-4 h-4"/> View Library</div>
+          </div>
+
+          <div onClick={() => setActiveView('scholarship-corner')} className="bg-gradient-to-br from-[#FFF8E1] to-[#FFF3E0] border border-[#FFE082] rounded-lg p-5 cursor-pointer hover:shadow-lg transition-all group relative overflow-hidden">
+             <div className="absolute top-0 right-0 -mr-4 -mt-4 opacity-10 group-hover:scale-110 transition-transform"><Star className="w-24 h-24 text-[#F57F17]" /></div>
+             <h3 className="text-xl font-bold tracking-tight mb-1 text-[#F57F17]">Premium Scholarships</h3>
+             <p className="text-[#E65100]/80 text-[13px] mb-4 font-medium">Curated list for parents.</p>
+             <div className="flex items-center gap-2 text-sm font-bold text-[#F57F17] w-max px-3 py-1.5 rounded-md"><Star className="w-4 h-4"/> Access Corner</div>
           </div>
           
           <div onClick={() => setActiveView('workshops')} className="bg-[#F8F9FA] border border-[#E4E6EB] rounded-lg p-5 cursor-pointer hover:shadow-md transition-all group relative overflow-hidden">
@@ -6405,6 +6515,8 @@ export default function App() {
     const urlParams = new URLSearchParams(window.location.search);
     const paymentSuccess = urlParams.get('payment_success');
     const paymentCancel = urlParams.get('payment_cancel');
+    const subscriptionSuccess = urlParams.get('subscription_success');
+    const subscriptionCancel = urlParams.get('subscription_cancel');
     const eventId = urlParams.get('eventId');
     
     if (paymentSuccess === 'true' && eventId && user && user.role === 'recruiter') {
@@ -6431,6 +6543,24 @@ export default function App() {
       unlockEvent();
     } else if (paymentCancel === 'true') {
       alert('Payment was cancelled.');
+      window.history.replaceState({}, document.title, window.location.pathname);
+    } else if (subscriptionSuccess === 'true' && user) {
+      const unlockSubscription = async () => {
+        try {
+          await updateDoc(doc(db, 'users', user.uid), {
+            hasScholarshipAccess: true
+          });
+          setUser({ ...user, hasScholarshipAccess: true });
+          setActiveView('scholarship-corner');
+          alert('Subscription successful! You now have access to NCRF Scholarship Corner.');
+          window.history.replaceState({}, document.title, window.location.pathname);
+        } catch (error) {
+           console.error('Error unlocking subscription:', error);
+        }
+      };
+      unlockSubscription();
+    } else if (subscriptionCancel === 'true') {
+      alert('Subscription payment was cancelled.');
       window.history.replaceState({}, document.title, window.location.pathname);
     }
   }, [user]);
@@ -6673,6 +6803,13 @@ export default function App() {
                           active: activeView === 'floorplan', 
                           onClick: () => setActiveView('floorplan'), 
                           roles: ['student', 'parent', 'admin'] 
+                        },
+                        { 
+                          label: 'NCRF Scholarship Corner', 
+                          icon: Star,
+                          active: activeView === 'scholarship-corner', 
+                          onClick: () => setActiveView('scholarship-corner'), 
+                          roles: ['student', 'parent'] 
                         },
                         { 
                           label: 'NCRF Resources', 
@@ -7018,6 +7155,17 @@ export default function App() {
                         <p className="text-[#606770] mt-1 font-medium italic">Empowering your future, one application at a time.</p>
                       </div>
                       <ScholarshipTracker />
+                    </div>
+                  ) : activeView === 'scholarship-corner' && (user?.role === 'student' || user?.role === 'parent') ? (
+                    <div className="max-w-5xl mx-auto py-6">
+                      <div className="mb-8">
+                        <h2 className="text-3xl font-black text-[#1C1E21] tracking-tight flex items-center gap-2">
+                          <Star className="text-[#F57F17]" />
+                          NCRF Scholarship Corner
+                        </h2>
+                        <p className="text-[#606770] mt-1 font-medium italic">Exclusive, curated scholarship list for our premium members.</p>
+                      </div>
+                      <NCRFScholarshipCorner />
                     </div>
                   ) : activeView === 'workshops' ? (
                     <div className="max-w-4xl mx-auto py-6">
